@@ -1,4 +1,4 @@
-"""TCG Pocket rules kernel, v0.8.2.
+"""TCG Pocket rules kernel, v0.8.3.
 
 Only effects explicitly identified in cards are executable. Unsupported text MUST
 prevent a real matchup from being run; tests may use synthetic fixtures.
@@ -105,7 +105,8 @@ class Battle:
     the exact mixed-type generation sequencing has not yet been implemented.
     """
     def __init__(self, left: list[Card], right: list[Card],
-                 energy_left=('water',), energy_right=('water',), seed=0):
+                 energy_left=('water',), energy_right=('water',), seed=0,
+                 force_first: int | None = None):
         validate_deck(left, tuple(energy_left))
         validate_deck(right, tuple(energy_right))
         if len(energy_left) != 1 or len(energy_right) != 1:
@@ -114,7 +115,9 @@ class Battle:
         self.players = [Player(list(left), tuple(energy_left)),
                         Player(list(right), tuple(energy_right))]
         self.turn = 0
-        self.current = self.rng.randrange(2)
+        if force_first is not None and force_first not in (0, 1):
+            raise RuleError('force_first must be P0, P1 or None')
+        self.current = self.rng.randrange(2) if force_first is None else force_first
         self.first = self.current
         self.winner: int | None = None
         self.finished = False
@@ -467,19 +470,64 @@ class Battle:
                 pokemon = self.rng.choice(pool)
                 pokemon.energy.pop(self.rng.randrange(len(pokemon.energy)))
                 self.log.append(f'{pokemon.card.name} discards 1 random Energy')
-        # Hoopa side effects resolve before the KO checks; neither bonus applies
-        # type weakness to Bench damage or self-damage.
-        if not self.finished and selected.effect == 'snipe_20_bench' and them.bench:
-            target = min(them.bench, key=lambda x:(x.card.hp-x.damage, x.card.hp))
-            self._damage_target(1-i, target, 20, i, source='Hoopa ex — Shadow Bullet', attack_damage=True)
+        # Resolve *all* attack damage before checking KOs. Pocket treats KOs
+        # from the same attack (including recoil and Bench damage) together;
+        # stopping after a single first KO produced impossible survivors.
+        if selected.effect == 'snipe_20_bench' and them.bench:
+            target = min(them.bench, key=lambda x: (x.card.hp-x.damage, x.card.hp))
+            target.damage += 20
+            self.log.append(f'Hoopa ex — Shadow Bullet: 20 damage to P{1-i} {target.card.name}')
         if selected.effect == 'recoil_20':
             me.active.damage += 20
             self.log.append(f'P{i} Hoopa ex recoil: 20 damage')
-        if not self.finished and them.active and them.active.damage >= them.active.card.hp:
-            self._knockout(1-i, i, from_attack=True)
-        if not self.finished and me.active and me.active.damage >= me.active.card.hp:
-            self._knockout(i, 1-i)
+        self._resolve_attack_knockouts()
         self.end_turn()
+
+    def _resolve_attack_knockouts(self):
+        """Score all KOs from the current attack as one resolution group.
+
+        Winners are determined by *number of satisfied conditions* (3+ points,
+        or all opposing Pokemon gone), not by arbitrary processing order.
+        """
+        # Collect before mutating the field so no KO is lost to early finish.
+        knocked = {
+            idx: ([p.active] if p.active and p.active.damage >= p.active.card.hp else []) +
+                 [x for x in p.bench if x.damage >= x.card.hp]
+            for idx, p in enumerate(self.players)
+        }
+        for victim, victims in knocked.items():
+            scorer = 1-victim
+            owner = self.players[victim]
+            for pokemon in victims:
+                if owner.active is pokemon:
+                    owner.active = None
+                    spot = 'Active'
+                else:
+                    owner.bench.remove(pokemon)
+                    spot = 'Bench'
+                if pokemon.tool and pokemon.tool.effect == 'lucky_egg' and victim != self.current:
+                    self.draw(victim, max(0, 5-len(owner.hand)))
+                    self.log.append(f'P{victim} Lucky Egg draws to {len(owner.hand)} cards')
+                self.players[scorer].points += pokemon.card.points
+                self.log.append(f'P{victim} {spot} KO {pokemon.card.name}; '
+                                f'P{scorer} score {self.players[scorer].points}')
+        conditions = [
+            (int(p.points >= 3) +
+             int(self.players[1-i].active is None and not self.players[1-i].bench))
+            for i, p in enumerate(self.players)
+        ]
+        if max(conditions) > 0:
+            self.finished = True
+            self.winner = 0 if conditions[0] > conditions[1] else 1 if conditions[1] > conditions[0] else None
+            self.log.append(f'Attack end: conditions P0={conditions[0]}, P1={conditions[1]}; '
+                            f'result={"tie" if self.winner is None else "P"+str(self.winner)}')
+            return
+        for idx, p in enumerate(self.players):
+            if p.active is None and p.bench:
+                replacement = max(p.bench, key=lambda x: (len(x.energy), x.card.hp-x.damage))
+                p.bench.remove(replacement)
+                p.active = replacement
+                self.log.append(f'P{idx} promotes {replacement.card.name}')
 
     def _knockout(self, victim: int, scorer: int, from_attack=False):
         p = self.players[victim]
@@ -537,6 +585,41 @@ class RuleAgent:
     """A transparent baseline policy, not an optimal or learned player."""
     def __init__(self, line_map=None):
         self.line_map = line_map or {}
+
+    @staticmethod
+    def attack_utility(attacker: InPlay, opponent: InPlay, bench: list[InPlay],
+                       attack: Attack) -> float:
+        """Transparent heuristic: prioritize KOs, damage, and immediate tactical effects.
+
+        Does not look into the other player's hand or future deck order. It is
+        a baseline policy for debugging, not a strong/optimal player.
+        """
+        damage = attack.damage
+        if attack.effect == 'bench_plus_30':
+            damage += 30 * len(bench)
+        if attack.effect == 'coin_bonus_30':
+            damage += 15  # expected value of one fair 30-damage coin flip
+        if damage > 0 and opponent.card.weakness == attacker.card.element:
+            damage += 20
+        ko = damage >= opponent.card.hp - opponent.damage
+        score = float(damage + (160 + 30 * opponent.card.points if ko else 0))
+        if attack.effect == 'snipe_20_bench':
+            score += 15  # extra damage to Bench, no weakness
+        if attack.effect == 'heal_self_30':
+            score += 0.75 * min(attacker.damage, 30)
+        if attack.effect == 'sleep_active':
+            score += 12
+        if attack.effect == 'item_lock_next_turn':
+            score += 10
+        if attack.effect == 'discard_opponent_supporter':
+            score += 10
+        if attack.effect == 'discard_2_global_random':
+            score += 5  # may affect both sides; rough small value
+        if attack.effect == 'recoil_20':
+            score -= 20
+            if attacker.damage + 20 >= attacker.card.hp and not ko:
+                score -= 250  # avoid self-KO unless it also secures a KO
+        return score
 
     @staticmethod
     def select_energy_target(player: Player) -> InPlay | None:
@@ -651,13 +734,14 @@ class RuleAgent:
         if p.active:
             options = [a for a in p.active.card.attacks if battle.can_pay_energy(p.active,a)]
             if options and p.active.status != 'asleep':
-                battle.attack(max(options,key=lambda a:a.damage + (15 if a.effect=='coin_bonus_30' else 0)))
+                battle.attack(max(options,key=lambda a:self.attack_utility(p.active,battle.players[1-i].active,p.bench,a)))
                 return
         battle.end_turn()
 
 
-def play_fixture_match(left, right, seed=0, energy_left=('water',), energy_right=('water',), line_map=None):
-    battle = Battle(left, right, energy_left, energy_right, seed)
+def play_fixture_match(left, right, seed=0, energy_left=('water',), energy_right=('water',),
+                       line_map=None, force_first=None, battle_cls=Battle):
+    battle = battle_cls(left, right, energy_left, energy_right, seed, force_first=force_first)
     agent = RuleAgent(line_map)
     while not battle.finished:
         agent.play_turn(battle)
