@@ -1,23 +1,25 @@
-"""TCG Pocket Lab v0.5: mobile card grid, deck workspace, local session deck slots."""
+"""TCG Pocket Lab v0.5.1: responsive grid, compact filters and deck editor."""
 import json
 from collections import defaultdict
 import streamlit as st
 from catalog_online import fetch_catalog, validate_selection, URL
 from deckbuilder import make_experiment
+from layout_helpers import paginate, PAGE_SIZE
 
 META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal', 'dragon', 'colorless']
 st.set_page_config(page_title='TCG Pocket Lab', page_icon='🃏', layout='wide')
-st.markdown('''<style>
-.block-container {padding-top: 1rem; padding-bottom: 3rem; max-width: 1050px}
-[data-testid="stImage"] img {border-radius: 9px}
-@media(max-width: 700px) {
- .block-container {padding-left: .65rem; padding-right: .65rem}
- h1 {font-size: 1.65rem !important}
- [data-testid="stVerticalBlockBorderWrapper"] {padding: 0 !important}
- div[data-testid="stButton"] button {min-height: 2.25rem; padding: .2rem .35rem}
+st.markdown("""<style>
+/* Only small visual refinements; the responsive grid is native Streamlit. */
+.block-container {max-width: 1050px; padding-top: 1rem; padding-bottom: 3rem}
+@media (max-width: 700px) {
+    .block-container {padding-left: .6rem; padding-right: .6rem}
+    h1 {font-size: 1.6rem !important}
+    [data-testid="stGrid"] [data-testid="stButton"] button {min-height: 2.5rem; padding: .15rem .25rem}
+    [data-testid="stGrid"] [data-testid="stImage"] img {border-radius: 5px}
 }
-</style>''', unsafe_allow_html=True)
+</style>""", unsafe_allow_html=True)
+
 for key, default in {'counts':{},'deck_name':'Meu deck','energy':['water'],'saved_decks':{},'page':1}.items():
     if key not in st.session_state: st.session_state[key] = default
 
@@ -47,7 +49,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.5','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.5.1','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     counts=data['cards']
@@ -65,62 +67,106 @@ def load_payload(data):
     st.session_state.deck_name=str(data.get('name','Meu deck'))[:100]
 
 st.title('🃏 TCG Pocket Lab')
-st.caption(f'v0.5 · {len(cards):,} registros · catálogo comunitário · simulações indisponíveis'.replace(',', '.'))
+st.caption(f'v0.5.1 · {len(cards):,} registros · catálogo comunitário · simulações indisponíveis'.replace(',', '.'))
 st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
 catalog_tab, deck_tab, lab_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','ℹ️ Sobre'])
 
+def reset_page():
+    st.session_state.page = 1
+
+
+def previous_page():
+    st.session_state.page = max(1, st.session_state.page - 1)
+
+
+def next_page():
+    st.session_state.page += 1
+
+
+def card_tile(card, location):
+    """Create one compact card inside a Streamlit grid cell."""
+    if card['image']:
+        st.image(card['image'], use_container_width=True)
+    else:
+        st.caption('🃏 Imagem indisponível')
+    st.markdown(f"**{card['name']}**")
+    st.caption(f"{card['set']} · #{card['number']}")
+    n = st.session_state.counts.get(card['id'], 0)
+    # This inner row must also stay horizontal on mobile.
+    minus, plus = st.columns(2, gap='xsmall', wrap=False)
+    minus.button('−', key=f'{location}_minus_{card["id"]}',
+                 disabled=n == 0, on_click=remove, args=(card['id'],),
+                 use_container_width=True)
+    plus.button(f'+ {n}', key=f'{location}_plus_{card["id"]}',
+                disabled=not can_add(card), on_click=add, args=(card['id'],),
+                use_container_width=True)
+
+
 with catalog_tab:
-    query=st.text_input('Buscar carta',placeholder='Nome do Pokémon ou treinador')
-    c1,c2=st.columns(2)
-    sets=sorted({c['set'] for c in cards if c['set']})
-    types=sorted({c['type'] for c in cards if c['type']})
-    chosen_set=c1.selectbox('Expansão',['Todas']+sets)
-    chosen_type=c2.selectbox('Categoria',['Todas']+types)
-    filtered=[c for c in cards if query.casefold() in c['name'].casefold() and (chosen_set=='Todas' or c['set']==chosen_set) and (chosen_type=='Todas' or c['type']==chosen_type)]
-    per_page=24
-    pages=max(1,(len(filtered)+per_page-1)//per_page)
-    # Clamp when a previous search had more pages.
-    page=st.number_input('Página',min_value=1,max_value=pages,value=min(st.session_state.page,pages),key='page_input')
-    st.session_state.page=page
-    st.caption(f'{len(filtered)} resultados · página {page} de {pages}')
-    visible=filtered[(page-1)*per_page:page*per_page]
-    for i in range(0,len(visible),2):
-        columns=st.columns(2,gap='small')
-        for col,card in zip(columns,visible[i:i+2]):
-            with col:
-                with st.container(border=True):
-                    if card['image']: st.image(card['image'],use_container_width=True)
-                    else: st.caption('🃏 Imagem indisponível')
-                    st.markdown(f"**{card['name']}**")
-                    st.caption(f"{card['set']} · #{card['number']} · {card['type']}")
-                    current=st.session_state.counts.get(card['id'],0)
-                    minus,plus=st.columns(2,gap='small')
-                    minus.button('−',key=f"card_minus_{card['id']}",disabled=current==0,on_click=remove,args=(card['id'],),use_container_width=True)
-                    plus.button(f'+ ({current})',key=f"card_plus_{card['id']}",disabled=not can_add(card),on_click=add,args=(card['id'],),use_container_width=True)
+    st.text_input('Buscar carta', placeholder='Nome do Pokémon ou treinador',
+                  key='catalog_query', on_change=reset_page)
+    with st.expander('⚙️ Filtrar por expansão e categoria', expanded=False):
+        sets = sorted({c['set'] for c in cards if c['set']})
+        types = sorted({c['type'] for c in cards if c['type']})
+        c1, c2 = st.columns(2)
+        with c1:
+            st.selectbox('Expansão', ['Todas'] + sets, key='chosen_set',
+                         on_change=reset_page)
+        with c2:
+            st.selectbox('Categoria', ['Todas'] + types, key='chosen_type',
+                         on_change=reset_page)
+
+    query = st.session_state.get('catalog_query', '').strip().casefold()
+    chosen_set = st.session_state.get('chosen_set', 'Todas')
+    chosen_type = st.session_state.get('chosen_type', 'Todas')
+    filtered = [c for c in cards
+                if query in c['name'].casefold()
+                and (chosen_set == 'Todas' or c['set'] == chosen_set)
+                and (chosen_type == 'Todas' or c['type'] == chosen_type)]
+    visible, page, pages = paginate(filtered, st.session_state.page, PAGE_SIZE)
+    st.session_state.page = page
+    st.caption(f'{len(filtered)} resultados · {PAGE_SIZE} por página')
+    back, current, forward = st.columns([1, 1.3, 1], gap='xsmall', wrap=False)
+    back.button('◀ Anterior', on_click=previous_page, disabled=page <= 1,
+                use_container_width=True)
+    current.markdown(f'<div style="text-align:center;padding:.45rem 0">{page} / {pages}</div>',
+                     unsafe_allow_html=True)
+    forward.button('Próxima ▶', on_click=next_page, disabled=page >= pages,
+                   use_container_width=True)
+
+    if not visible:
+        st.info('Nenhuma carta encontrada para esses filtros.')
+    else:
+        # Streamlit >=1.67: up to 4 columns on desktop; 2 on typical phones.
+        # The native grid reflows, unlike st.columns() with its default wrap.
+        gallery = st.grid(4, min_column_width=150, gap='xsmall',
+                          border=True, key='catalog_gallery')
+        for card in visible:
+            with gallery.cell():
+                card_tile(card, 'catalog')
 
 with deck_tab:
-    st.text_input('Nome do deck',key='deck_name')
-    st.multiselect('Energias (até 3)',ENERGIES,key='energy',max_selections=3)
-    selected=list(st.session_state.counts.items())
-    if not selected: st.info('Seu deck está vazio. Vá à aba Cartas para adicionar Pokémon e treinadores.')
-    for i in range(0,len(selected),2):
-        cols=st.columns(2,gap='small')
-        for col,(cid,n) in zip(cols,selected[i:i+2]):
-            c=by_id.get(cid)
-            with col:
-                with st.container(border=True):
-                    if c and c['image']: st.image(c['image'],use_container_width=True)
-                    st.markdown(f"**{n}× {c['name'] if c else cid}**")
-                    if c: st.caption(f"{c['set']} · #{c['number']}")
-                    minus,plus=st.columns(2)
-                    minus.button('−',key='deck_minus_'+cid,on_click=remove,args=(cid,),use_container_width=True)
-                    plus.button('+',key='deck_plus_'+cid,disabled=not c or not can_add(c),on_click=add,args=(cid,),use_container_width=True)
+    st.text_input('Nome do deck', key='deck_name')
+    st.multiselect('Energias (até 3)', ENERGIES, key='energy', max_selections=3)
+    selected = list(st.session_state.counts.items())
+    if not selected:
+        st.info('Seu deck está vazio. Vá à aba Cartas para adicionar Pokémon e treinadores.')
+    else:
+        gallery = st.grid(4, min_column_width=150, gap='xsmall',
+                          border=True, key='my_deck_gallery')
+        for cid, n in selected:
+            c = by_id.get(cid)
+            with gallery.cell():
+                if c:
+                    card_tile(c, 'deck')
+                else:
+                    st.warning(f'Carta ausente: {cid}')
     issues=validate_selection(st.session_state.counts,cards)
     if not st.session_state.energy: issues.append('Selecione ao menos um tipo de energia.')
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4 ou v0.5)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4, v0.5 ou v0.5.1)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
