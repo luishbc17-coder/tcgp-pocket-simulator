@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.3.2: source-backed card effect expansion and preserved tabs."""
+"""TCG Pocket Lab v0.9.3.3: persistent navigation and accessible meta gauntlet."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -97,14 +97,30 @@ def load_payload(data):
 
 # This executes BEFORE st.text_input(deck_name) and st.multiselect(energy).
 # It works for Copy preset, Import JSON, and Open saved deck alike.
-apply_pending_transfer(st.session_state)
+_imported_deck = apply_pending_transfer(st.session_state)
+if _imported_deck is not None:
+    # The editor keys are widget-owned; staged imports take priority on next render.
+    st.session_state.pop('deck_name_editor_v0933', None)
+    st.session_state.pop('energy_editor_v0933', None)
 
 st.markdown(hero(len(cards), total()), unsafe_allow_html=True)
 _notice = st.session_state.pop('_deck_transfer_notice', None)
 if _notice:
-    st.success(f'Deck «{_notice}» carregado com sucesso. Abra a aba Meu deck para editar.')
-catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'],
-    key='main_active_tab_v0931', on_change='rerun')
+    st.success(f'Deck «{_notice}» carregado com sucesso. Continue na Arena ou abra Meu deck para editar.')
+# Real, stateful navigation: unlike st.tabs, it does not rely on the frontend
+# keeping an active tab after a rerun or a staged deck import.
+NAV_ITEMS = ('🔎 Cartas', '🧩 Meu deck', '⚔️ Meta', '⚙️ Motor', 'ℹ️ Sobre')
+with st.container(key='lab_navigation_v0933'):
+    current_view = st.radio('Navegação principal', NAV_ITEMS, horizontal=True,
+                            label_visibility='collapsed', key='main_view_v0933')
+
+
+def save_deck_name():
+    st.session_state.deck_name = st.session_state.deck_name_editor_v0933
+
+
+def save_deck_energy():
+    st.session_state.energy = list(st.session_state.energy_editor_v0933)
 
 def reset_page():
     st.session_state.page = 1
@@ -138,7 +154,7 @@ def card_tile(card, location, support=None):
                 use_container_width=True)
 
 
-with catalog_tab:
+if current_view == '🔎 Cartas':
     st.markdown(section('Explore as cartas',
         'Busque por nome, filtre por expansão e adicione cartas ao seu deck.',
         'COLEÇÃO'), unsafe_allow_html=True)
@@ -233,12 +249,15 @@ with catalog_tab:
                            on_click=next_page, disabled=page >= pages,
                            use_container_width=True)
 
-with deck_tab:
+if current_view == '🧩 Meu deck':
     st.markdown(section('Construa seu deck',
         'Monte uma lista de 20 cartas e escolha a energia para testar na arena.',
         'DECK BUILDER'), unsafe_allow_html=True)
-    st.text_input('Nome do deck', key='deck_name')
-    st.multiselect('Energias (até 3)', ENERGIES, key='energy', max_selections=3)
+    st.session_state.setdefault('deck_name_editor_v0933', st.session_state.deck_name)
+    st.session_state.setdefault('energy_editor_v0933', list(st.session_state.energy))
+    st.text_input('Nome do deck', key='deck_name_editor_v0933', on_change=save_deck_name)
+    st.multiselect('Energias (até 3)', ENERGIES, key='energy_editor_v0933',
+                   max_selections=3, on_change=save_deck_energy)
     st.markdown(deck_overview(st.session_state.counts, by_id, st.session_state.energy),
                 unsafe_allow_html=True)
     selected = list(st.session_state.counts.items())
@@ -284,7 +303,7 @@ with deck_tab:
         if col3.button('Excluir',key='delete_'+name):
             del st.session_state.saved_decks[name]; st.rerun()
 
-with lab_tab:
+if current_view == '⚔️ Meta':
     st.markdown(section('Arena de confrontos',
         'Escolha seu oponente, confira os efeitos e investigue o comportamento da IA.',
         'BATTLE LAB'), unsafe_allow_html=True)
@@ -318,6 +337,167 @@ with lab_tab:
         help='A mesma política controla os dois jogadores. Não é treinamento de modelo de IA.')
     agent_mode = 'tactical' if policy_label.startswith('Tática') else 'baseline'
     st.caption('IA tática: evita energias sem ataque viável, considera evoluções, recua com critério e usa Cyrus de modo mais seletivo.')
+
+    st.divider()
+    st.markdown(section('Meu deck × Todo o meta',
+        'Compare sua lista com todos os arquétipos cadastrados em uma única execução, '
+        'sem simular cartas cujo efeito ainda esteja pendente.',
+        'GAUNTLET · EXPERIMENTAL'), unsafe_allow_html=True)
+    st.caption('As taxas exibidas refletem somente duelos técnicos executados com IA heurística. '
+               'Adversários incompatíveis são identificados e excluídos dos percentuais.')
+    st.markdown(f'**Seu deck atual:** {st.session_state.deck_name} · '
+                f'{total()}/20 cartas · Energia: {", ".join(st.session_state.energy)}')
+    if st.button('🧩 Usar Mega Altaria/Greninja para testar a Arena',
+                 key='gauntlet_starter_deck_v0933', use_container_width=True):
+        try:
+            load_payload(get_preset('mega_altaria_greninja'))
+            st.session_state['_deck_transfer_notice_meta'] = (
+                'Mega Altaria/Greninja carregado. A Arena permanece selecionada.')
+            st.rerun()
+        except (ValueError, KeyError, TypeError) as exc:
+            st.error(f'Não foi possível carregar o deck de referência: {exc}')
+    with st.expander('🔄 Catálogo de combate e diagnóstico', expanded=False):
+        st.caption('O catálogo de combate pode permanecer em cache. Se habilidades novas ' 
+                   'aparecerem como não reconhecidas, atualize a fonte antes de testar.')
+        if st.button('Atualizar dados de cartas e rever compatibilidade',
+                     key='refresh_gameplay_v0931', use_container_width=True):
+            fetch_gameplay_catalog.clear()
+            get_card_support_index.clear()
+            st.rerun()
+        st.caption('A exportação diagnóstica abaixo contém somente textos públicos ' 
+                   'de cartas dos decks cadastrados; não inclui dados pessoais.')
+    chosen_gauntlet = st.multiselect('Decks do meta a enfrentar', options=list(DECKS),
+        default=list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
+        key='gauntlet_field_v093')
+    include_mirror = st.checkbox('Incluir confronto espelhado (se houver)',
+        value=False, key='gauntlet_mirror_v093')
+    gauntlet_games = st.select_slider('Partidas por adversário compatível',
+        options=[25,50,100,250], value=100, key='gauntlet_games_v093')
+    gauntlet_seed = st.number_input('Semente da série', min_value=0, max_value=2_000_000_000,
+        value=20261116, step=1, key='gauntlet_seed_v093')
+    gauntlet_player = payload()
+    gauntlet_request = {
+        'player': gauntlet_player, 'field': list(chosen_gauntlet),
+        'mirror': bool(include_mirror), 'games': int(gauntlet_games),
+        'seed': int(gauntlet_seed), 'agent_mode': agent_mode,
+    }
+    gauntlet_data = None
+    gauntlet_plan = None
+    if chosen_gauntlet:
+        try:
+            gauntlet_data = fetch_gameplay_catalog()
+            gauntlet_field = {slug:get_preset(slug) for slug in chosen_gauntlet}
+            gauntlet_plan = build_gauntlet_plan(
+                gauntlet_player, gauntlet_field, cards, gauntlet_data,
+                include_mirror=include_mirror)
+            from visual_theme import gauntlet_status_summary, gauntlet_cards
+            if not gauntlet_plan['player']['technical_demo_ready']:
+                st.error('Seu deck atual ainda não pode ser simulado. '
+                         'Escolha uma lista compatível ou corrija as cartas abaixo.')
+                for issue in gauntlet_plan['player']['issues'][:3]:
+                    st.warning(issue)
+                for blocked in [c for c in gauntlet_plan['player']['cards']
+                                if c['status'] == 'bloqueada'][:5]:
+                    st.caption(f'{blocked["name"]}: {blocked["reason"]}')
+            st.markdown(gauntlet_status_summary(gauntlet_plan), unsafe_allow_html=True)
+            with st.expander('📋 Ver compatibilidade por adversário', expanded=False):
+                st.markdown(gauntlet_cards(gauntlet_plan['opponents']),
+                            unsafe_allow_html=True)
+            with st.expander('Detalhes das cartas e mecânicas pendentes'):
+                for row in gauntlet_plan['opponents']:
+                    if row['reasons']:
+                        st.markdown(f"**{row['name']}**")
+                        for reason in row['reasons'][:6]:
+                            st.write('• ' + reason)
+            from meta_diagnostics import blocked_catalog_diagnostics
+            debug_export = blocked_catalog_diagnostics(gauntlet_plan,
+                gauntlet_field, gauntlet_data)
+            if debug_export['blocked_cards']:
+                st.download_button('⬇ Baixar diagnóstico das cartas pendentes (JSON)',
+                    data=json.dumps(debug_export, ensure_ascii=False, indent=2),
+                    file_name='diagnostico_cartas_v0931.json', mime='application/json',
+                    key='download_catalog_diag_v0931', use_container_width=True)
+            if gauntlet_plan['ready'] == 0:
+                st.warning('Nenhum dos adversários selecionados é simulável com seu deck. '
+                           'Confira os motivos ou escolha outro confronto.')
+            st.caption(f"Execução prevista: {gauntlet_plan['ready'] * int(gauntlet_games)} partidas "
+                       f"auditadas em {gauntlet_plan['ready']} confronto(s).")
+        except (requests.RequestException, ValueError, TypeError, KeyError, RuleError) as exc:
+            st.error(f'Falha na verificação do meta: {exc}')
+    else:
+        st.info('Escolha pelo menos um deck adversário para montar a série.')
+    can_run_gauntlet = bool(gauntlet_plan and gauntlet_plan['ready'] > 0)
+    if can_run_gauntlet:
+        st.info(f'{gauntlet_plan["ready"]} confronto(s) disponível(is). Os decks pendentes serão ignorados, não contam como derrota.')
+    if st.button('▶ Simular apenas os confrontos compatíveis', use_container_width=True,
+                 disabled=not can_run_gauntlet, key='run_gauntlet_v093'):
+        bar = st.progress(0, text='Preparando confrontos auditados…')
+        try:
+            count = gauntlet_plan['ready'] * int(gauntlet_games)
+            def update_gauntlet(done, expected):
+                if expected:
+                    bar.progress(min(1.0, done/expected),
+                                 text=f'{done}/{expected} partidas técnicas')
+            output = run_meta_gauntlet(
+                gauntlet_player, gauntlet_field, cards, gauntlet_data,
+                games_per_opponent=int(gauntlet_games), seed=int(gauntlet_seed),
+                agent_mode=agent_mode, include_mirror=bool(include_mirror),
+                progress=update_gauntlet)
+            st.session_state['gauntlet_report_v093'] = {
+                'request': gauntlet_request, 'report': output}
+            bar.progress(1.0, text=f'{output["completed"]}/{count} concluídas')
+        except (RuleError, UnsupportedEffect, ValueError, IndexError,
+                TypeError, KeyError, AttributeError, RuntimeError) as exc:
+            st.error(f'Não foi possível concluir a série: {type(exc).__name__}: {exc}')
+            st.session_state['gauntlet_failure_v0933'] = {
+                'kind': 'technical_gauntlet_failure',
+                'version': VERSION,
+                'agent_mode': agent_mode,
+                'request': gauntlet_request,
+                'error_type': type(exc).__name__,
+                'error_message': str(exc)[:500],
+            }
+        else:
+            st.session_state.pop('gauntlet_failure_v0933', None)
+    last_failure = st.session_state.get('gauntlet_failure_v0933')
+    if last_failure and last_failure['request'] == gauntlet_request:
+        st.download_button('⬇️ Baixar diagnóstico de falha da simulação',
+            data=json.dumps(last_failure, ensure_ascii=False, indent=2),
+            file_name='diagnostico_erro_simulacao_v0933.json',
+            mime='application/json', key='gauntlet_failure_download_v0933',
+            use_container_width=True)
+    saved_gauntlet = st.session_state.get('gauntlet_report_v093')
+    if saved_gauntlet and saved_gauntlet['request'] == gauntlet_request:
+        gauntlet_report = saved_gauntlet['report']
+        st.markdown('#### Resultado por adversário')
+        st.dataframe([{
+            'Adversário': row['name'],
+            'Estado': {'completed':'✅ Concluído','partial':'⚠️ Parcial',
+                       'blocked':'🛠️ Bloqueado','mirror':'🔁 Espelhado',
+                       'error':'❌ Erro'}.get(row['status'], row['status']),
+            'Vitórias': row['outcomes']['left'] if row['outcomes'] else None,
+            'Derrotas': row['outcomes']['right'] if row['outcomes'] else None,
+            'Empates': row['outcomes']['draw'] if row['outcomes'] else None,
+            'Vitórias (%)': row['win_rate'],
+            'Partidas': row['completed'],
+        } for row in gauntlet_report['results']], use_container_width=True, hide_index=True)
+        g1,g2 = st.columns(2, gap='small')
+        g1.metric('Partidas técnicas concluídas', gauntlet_report['completed'])
+        g2.metric('Falhas', gauntlet_report['failed'])
+        if gauntlet_report['overall_win_rate'] is not None:
+            st.metric('Vitórias nos confrontos executados',
+                      f'{gauntlet_report["overall_win_rate"]:.1f}%')
+        st.caption(gauntlet_report['overall_rate_note'])
+        st.download_button('⬇️ Baixar relatório completo da série (JSON)',
+            data=json.dumps(gauntlet_report, ensure_ascii=False, indent=2),
+            file_name='meu_deck_vs_meta_v093.json', mime='application/json',
+            use_container_width=True, key='download_gauntlet_v093')
+    elif saved_gauntlet:
+        st.info('A configuração mudou desde o último teste. Execute novamente para atualizar os resultados.')
+
+
+    st.divider()
+    st.subheader('Duelo contra um adversário')
     opponent_mode = st.radio('Deck adversário',
         ['Deck do meta','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
         horizontal=False, key='opponent_mode')
@@ -673,125 +853,9 @@ with lab_tab:
     else:
         st.info('Importe ou selecione um deck adversário para iniciar o diagnóstico.')
 
-    st.divider()
-    st.markdown(section('Meu deck × Todo o meta',
-        'Compare sua lista com todos os arquétipos cadastrados em uma única execução, '
-        'sem simular cartas cujo efeito ainda esteja pendente.',
-        'GAUNTLET · EXPERIMENTAL'), unsafe_allow_html=True)
-    st.caption('As taxas exibidas refletem somente duelos técnicos executados com IA heurística. '
-               'Adversários incompatíveis são identificados e excluídos dos percentuais.')
-    with st.expander('🔄 Catálogo de combate e diagnóstico', expanded=False):
-        st.caption('O catálogo de combate pode permanecer em cache. Se habilidades novas ' 
-                   'aparecerem como não reconhecidas, atualize a fonte antes de testar.')
-        if st.button('Atualizar dados de cartas e rever compatibilidade',
-                     key='refresh_gameplay_v0931', use_container_width=True):
-            fetch_gameplay_catalog.clear()
-            get_card_support_index.clear()
-            st.rerun()
-        st.caption('A exportação diagnóstica abaixo contém somente textos públicos ' 
-                   'de cartas dos decks cadastrados; não inclui dados pessoais.')
-    chosen_gauntlet = st.multiselect('Decks do meta a enfrentar', options=list(DECKS),
-        default=list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
-        key='gauntlet_field_v093')
-    include_mirror = st.checkbox('Incluir confronto espelhado (se houver)',
-        value=False, key='gauntlet_mirror_v093')
-    gauntlet_games = st.select_slider('Partidas por adversário compatível',
-        options=[25,50,100,250], value=100, key='gauntlet_games_v093')
-    gauntlet_seed = st.number_input('Semente da série', min_value=0, max_value=2_000_000_000,
-        value=20261116, step=1, key='gauntlet_seed_v093')
-    gauntlet_player = payload()
-    gauntlet_request = {
-        'player': gauntlet_player, 'field': list(chosen_gauntlet),
-        'mirror': bool(include_mirror), 'games': int(gauntlet_games),
-        'seed': int(gauntlet_seed), 'agent_mode': agent_mode,
-    }
-    gauntlet_data = None
-    gauntlet_plan = None
-    if chosen_gauntlet:
-        try:
-            gauntlet_data = fetch_gameplay_catalog()
-            gauntlet_field = {slug:get_preset(slug) for slug in chosen_gauntlet}
-            gauntlet_plan = build_gauntlet_plan(
-                gauntlet_player, gauntlet_field, cards, gauntlet_data,
-                include_mirror=include_mirror)
-            from visual_theme import gauntlet_status_summary, gauntlet_cards
-            st.markdown(gauntlet_status_summary(gauntlet_plan), unsafe_allow_html=True)
-            st.markdown(gauntlet_cards(gauntlet_plan['opponents']),
-                        unsafe_allow_html=True)
-            with st.expander('Detalhes das cartas e mecânicas pendentes'):
-                for row in gauntlet_plan['opponents']:
-                    if row['reasons']:
-                        st.markdown(f"**{row['name']}**")
-                        for reason in row['reasons'][:6]:
-                            st.write('• ' + reason)
-            from meta_diagnostics import blocked_catalog_diagnostics
-            debug_export = blocked_catalog_diagnostics(gauntlet_plan,
-                gauntlet_field, gauntlet_data)
-            if debug_export['blocked_cards']:
-                st.download_button('⬇ Baixar diagnóstico das cartas pendentes (JSON)',
-                    data=json.dumps(debug_export, ensure_ascii=False, indent=2),
-                    file_name='diagnostico_cartas_v0931.json', mime='application/json',
-                    key='download_catalog_diag_v0931', use_container_width=True)
-            if gauntlet_plan['ready'] == 0:
-                st.warning('Nenhum dos adversários selecionados é simulável com seu deck. '
-                           'Confira os motivos ou escolha outro confronto.')
-            st.caption(f"Execução prevista: {gauntlet_plan['ready'] * int(gauntlet_games)} partidas "
-                       f"auditadas em {gauntlet_plan['ready']} confronto(s).")
-        except (requests.RequestException, ValueError, TypeError, KeyError, RuleError) as exc:
-            st.error(f'Falha na verificação do meta: {exc}')
-    else:
-        st.info('Escolha pelo menos um deck adversário para montar a série.')
-    can_run_gauntlet = bool(gauntlet_plan and gauntlet_plan['ready'] > 0)
-    if st.button('⚔️ Simular meu deck contra o meta', use_container_width=True,
-                 disabled=not can_run_gauntlet, key='run_gauntlet_v093'):
-        bar = st.progress(0, text='Preparando confrontos auditados…')
-        try:
-            count = gauntlet_plan['ready'] * int(gauntlet_games)
-            def update_gauntlet(done, expected):
-                if expected:
-                    bar.progress(min(1.0, done/expected),
-                                 text=f'{done}/{expected} partidas técnicas')
-            output = run_meta_gauntlet(
-                gauntlet_player, gauntlet_field, cards, gauntlet_data,
-                games_per_opponent=int(gauntlet_games), seed=int(gauntlet_seed),
-                agent_mode=agent_mode, include_mirror=bool(include_mirror),
-                progress=update_gauntlet)
-            st.session_state['gauntlet_report_v093'] = {
-                'request': gauntlet_request, 'report': output}
-            bar.progress(1.0, text=f'{output["completed"]}/{count} concluídas')
-        except (RuleError, UnsupportedEffect, ValueError, IndexError, TypeError) as exc:
-            st.error(f'Série técnica interrompida: {exc}')
-    saved_gauntlet = st.session_state.get('gauntlet_report_v093')
-    if saved_gauntlet and saved_gauntlet['request'] == gauntlet_request:
-        gauntlet_report = saved_gauntlet['report']
-        st.markdown('#### Resultado por adversário')
-        st.dataframe([{
-            'Adversário': row['name'],
-            'Estado': {'completed':'✅ Concluído','partial':'⚠️ Parcial',
-                       'blocked':'🛠️ Bloqueado','mirror':'🔁 Espelhado',
-                       'error':'❌ Erro'}.get(row['status'], row['status']),
-            'Vitórias': row['outcomes']['left'] if row['outcomes'] else None,
-            'Derrotas': row['outcomes']['right'] if row['outcomes'] else None,
-            'Empates': row['outcomes']['draw'] if row['outcomes'] else None,
-            'Vitórias (%)': row['win_rate'],
-            'Partidas': row['completed'],
-        } for row in gauntlet_report['results']], use_container_width=True, hide_index=True)
-        g1,g2 = st.columns(2, gap='small')
-        g1.metric('Partidas técnicas concluídas', gauntlet_report['completed'])
-        g2.metric('Falhas', gauntlet_report['failed'])
-        if gauntlet_report['overall_win_rate'] is not None:
-            st.metric('Vitórias nos confrontos executados',
-                      f'{gauntlet_report["overall_win_rate"]:.1f}%')
-        st.caption(gauntlet_report['overall_rate_note'])
-        st.download_button('⬇️ Baixar relatório completo da série (JSON)',
-            data=json.dumps(gauntlet_report, ensure_ascii=False, indent=2),
-            file_name='meu_deck_vs_meta_v093.json', mime='application/json',
-            use_container_width=True, key='download_gauntlet_v093')
-    elif saved_gauntlet:
-        st.info('A configuração mudou desde o último teste. Execute novamente para atualizar os resultados.')
 
-with motor_tab:
-    st.subheader('Motor de regras v0.9.3.2 — expansão incremental')
+if current_view == '⚙️ Motor':
+    st.subheader('Motor de regras v0.9.3.3 — expansão incremental')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
@@ -847,7 +911,7 @@ with motor_tab:
         else:
             st.success(f'{diagnostic["completed"]}/{diagnostic["attempted"]} partidas técnicas concluídas sem exceções. Não representa win rate contra o meta.')
 
-with info_tab:
+if current_view == 'ℹ️ Sobre':
     st.markdown('**Fonte:** [PocketDecks v5](https://github.com/PocketDecks/pokemon-tcg-pocket-cards) — comunitária, não oficial; baseada em dados do Limitless.')
     st.markdown('**Versões da base:** `core` contém cartas distintas jogáveis (sem todas as variantes de arte); `gameplay` acrescenta dados de ataques, habilidades e treinadores. [Documentação de esquema](https://github.com/PocketDecks/pokemon-tcg-pocket-cards/blob/main/docs/payloads.md).')
     st.markdown('**Limitação central:** a leitura de texto de carta não executa automaticamente sua habilidade. Apenas handlers explicitamente auditados entram na simulação.')

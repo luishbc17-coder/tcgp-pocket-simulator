@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.3.2'
+VERSION = '0.9.3.3'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),
@@ -115,6 +115,14 @@ CSS = r"""
 .lab-result-bar span {height:100%;display:block;background:linear-gradient(90deg,#8173ed,#ada2ff);border-radius:10px;}
 .lab-result-bar.alt span {background:linear-gradient(90deg,#339eae,#74d7d4);}
 .lab-results-note {margin-top:11px;font-size:.7rem;line-height:1.45;opacity:.69;}
+/* Stable mobile navigation: a single row which can scroll on narrow phones. */
+[class*='st-key-lab_navigation_v0933'] [role='radiogroup'] {
+  display:flex; flex-wrap:nowrap!important; overflow-x:auto; scrollbar-width:thin;
+  padding:2px 0 7px; gap:5px; overscroll-behavior-x:contain;
+}
+[class*='st-key-lab_navigation_v0933'] [role='radiogroup'] label {
+  flex:0 0 auto; min-height:40px; padding:3px 6px; white-space:nowrap;
+}
 /* Native tabs stay scrollable on smaller phones and have larger touch targets. */
 [data-testid="stTabs"] [data-baseweb="tab-list"] {overflow-x:auto;overflow-y:hidden;
   scrollbar-width:thin;gap:6px;padding:2px 1px 6px;}
