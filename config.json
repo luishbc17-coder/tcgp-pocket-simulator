@@ -1,0 +1,8 @@
+{
+  "target_games_per_matchup": 100000,
+  "seed": 20261116,
+  "player_deck": "Mega Swampert ex",
+  "opponents": ["Mega Altaria ex / Greninja", "Mega Charizard Y ex / Entei ex", "Suicune ex / Baxcalibur", "Magnezone / Miraidon ex", "Hoopa ex / Mega Absol ex"],
+  "execution_enabled": false,
+  "blockers": ["verified complete card database", "full turn and setup rules", "attack and trainer effect interpreters", "decklists for each opponent", "legal-action and endgame validation"]
+}

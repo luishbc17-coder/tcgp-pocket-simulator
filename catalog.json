@@ -1,0 +1,17 @@
+{
+  "notes": "Illustrative starter IDs only. These entries are NOT verified for gameplay. Populate from sourced card records before full simulation.",
+  "cards": [
+    {"card":{"id":"demo-mudkip","name":"Mudkip","kind":"pokemon","stage":0,"hp":60},"verified":false},
+    {"card":{"id":"demo-marshtomp","name":"Marshtomp","kind":"pokemon","stage":1,"evolves_from":"Mudkip","hp":90},"verified":false},
+    {"card":{"id":"demo-mega-swampert","name":"Mega Swampert ex","kind":"pokemon","stage":2,"evolves_from":"Marshtomp","hp":230,"points":3},"verified":false},
+    {"card":{"id":"demo-pokeball","name":"Poké Bola","kind":"item"},"verified":false},
+    {"card":{"id":"demo-professor","name":"Pesquisa de Professores","kind":"supporter"},"verified":false},
+    {"card":{"id":"demo-rare-candy","name":"Doce Raro","kind":"item"},"verified":false},
+    {"card":{"id":"demo-manaphy","name":"Manaphy","kind":"pokemon","hp":70},"verified":false},
+    {"card":{"id":"demo-mantyke","name":"Mantyke","kind":"pokemon","hp":40},"verified":false},
+    {"card":{"id":"demo-suicune","name":"Suicune","kind":"pokemon","hp":100},"verified":false},
+    {"card":{"id":"demo-cyrus","name":"Cyrus","kind":"supporter"},"verified":false},
+    {"card":{"id":"demo-irida","name":"Irida","kind":"supporter"},"verified":false},
+    {"card":{"id":"demo-imitadora","name":"Imitadora","kind":"supporter"},"verified":false}
+  ]
+}
