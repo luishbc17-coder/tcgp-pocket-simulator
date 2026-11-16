@@ -6,6 +6,7 @@ rules engine. We only compile explicitly supported text into executable cards.
 from __future__ import annotations
 from collections import Counter
 import re
+import unicodedata
 from typing import Iterable
 from battle_engine import Attack, Card, UnsupportedEffect, parse_cost, RuleError
 
@@ -72,99 +73,137 @@ def audit_gameplay_records(gameplay: list[dict], core: list[dict] | None = None)
 
 
 def _text(s):
-    return ' '.join(str(s or '').split()).casefold().strip().rstrip('.')
+    """Canonical English card text: ignore typography, not the mechanical words.
+
+    OCR, JSON newlines and typographic apostrophes can vary between source
+    versions. Entire texts are still compared with known reference sentences;
+    unexpected mechanics never match merely because a familiar name is present.
+    """
+    text = unicodedata.normalize('NFKC', str(s or '')).casefold()
+    text = (text.replace('’', "'").replace('‘', "'")
+                .replace('—', '-').replace('–', '-')
+                .replace('pokémon', 'pokemon'))
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text.rstrip(' .')
+
+
+def _same_text(source, reference):
+    """Strict equality after removing nonsemantic formatting variations."""
+    def canon(x):
+        x = _text(x)
+        # Some data revisions differ in comma spacing, full stops and bracket spacing.
+        x = re.sub(r'\s*([,.!?()[\]])\s*', r'\1', x)
+        x = re.sub(r'\[\s*([a-z])\s*\]', r'[\1]', x)
+        return x
+    return canon(source) == canon(reference)
+
+
+def _is_one_of(source, *references):
+    return any(_same_text(source, reference) for reference in references)
+
+
+# Explicit reference transcriptions of the PocketDecks v5 English game text.
+# Multiple entries are accepted only where the wording is mechanically identical.
+TRAINER_EFFECTS = {
+    "Professor's Research": ('research', (
+        'Draw 2 cards.',
+    )),
+    'Poké Ball': ('pokeball', (
+        'Put 1 random Basic Pokémon from your deck into your hand.',
+    )),
+    'Rare Candy': ('rare_candy', (
+        "Choose 1 of your Basic Pokémon in play. If you have a Stage 2 card in your hand that evolves from that Pokémon, put that card on the Basic Pokémon to evolve it, skipping the Stage 1. You can't use this card during your first turn or on a Basic Pokémon that was put into play this turn.",
+    )),
+    'Copycat': ('copycat', (
+        "Shuffle your hand into your deck. Draw a card for each card in your opponent's hand.",
+    )),
+    'Pokémon Center Lady': ('center_lady', (
+        'Heal 30 damage from 1 of your Pokémon, and it recovers from all Special Conditions.',
+    )),
+    'Repel': ('repel', (
+        "Switch out your opponent's Active Basic Pokémon to the Bench. (Your opponent chooses the new Active Pokémon.)",
+    )),
+    'Cyrus': ('cyrus', (
+        "Switch in 1 of your opponent's Benched Pokémon that has damage on it to the Active Spot.",
+    )),
+    'Mars': ('mars', (
+        "Your opponent shuffles their hand into their deck and draws a card for each of their remaining points needed to win.",
+    )),
+    'X Speed': ('x_speed', (
+        'During this turn, the Retreat Cost of your Active Pokémon is 1 less.',
+    )),
+    'Field Blower': ('field_blower', (
+        "Discard a Pokémon Tool card from a Pokémon (yours or your opponent's) , or discard a Stadium card in play.",
+    )),
+    'Lucky Ice Pop': ('lucky_ice_pop', (
+        'Heal 20 damage from your Active Pokémon. If you healed any damage in this way, flip a coin. If heads, put this Lucky Ice Pop into your hand instead of discarding it.',
+        'Heal 20 damage from your Active Pokémon. If you healed any damage in this way, flip a coin. If heads, put this Lucky Ice Pop into your hand instead of the discard pile.',
+    )),
+}
 
 
 def _recognize_trainer(r: dict):
     name = r['name']
-    text = _text(r.get('card_text'))
-    if name == "Professor's Research" and text == 'draw 2 cards':
-        return 'research'
-    if name == 'Poké Ball' and text in (
-        'put 1 random basic pokemon from your deck into your hand',
-        'put 1 random basic pokémon from your deck into your hand'):
-        return 'pokeball'
-    if name == 'Rare Candy' and (
-        text.startswith('choose 1 of your basic pokémon in play.')
-        and 'stage 2' in text and 'skipping the stage 1' in text
-        and "can't use this card during your first turn" in text):
-        return 'rare_candy'
-    if name == 'Copycat' and text == ("shuffle your hand into your deck. "
-                                              "draw a card for each card in your opponent's hand"):
-        return 'copycat'
-    if name == 'Pokémon Center Lady' and text == (
-            'heal 30 damage from 1 of your pokémon, and it recovers from all special conditions'):
-        return 'center_lady'
-    if name == 'Repel' and text == (
-            "switch out your opponent's active basic pokémon to the bench. "
-            '(your opponent chooses the new active pokémon.)'):
-        return 'repel'
-    if name == 'Cyrus' and text == ("switch in 1 of your opponent's benched pokémon "
-                                            "that has damage on it to the active spot"):
-        return 'cyrus'
-    if name == 'Mars' and text == ("your opponent shuffles their hand into their deck "
-                                           "and draws a card for each of their remaining points needed to win"):
-        return 'mars'
-    if name == 'X Speed' and text == ("during this turn, the retreat cost of your "
-                                              "active pokémon is 1 less"):
-        return 'x_speed'
-    if name == 'Field Blower' and text == (
-            "discard a pokémon tool card from a pokémon (yours or your opponent's) , "
-            'or discard a stadium card in play'):
-        return 'field_blower'
-    if name == 'Lucky Ice Pop' and text == (
-            'heal 20 damage from your active pokémon. if you healed any damage in this way, '
-            'flip a coin. if heads, put this lucky ice pop into your hand instead of discarding it'):
-        return 'lucky_ice_pop'
-    raise UnsupportedEffect(f'{name}: texto de treinador não implementado')
+    text = r.get('card_text')
+    if name == 'Rare Candy':
+        # PocketDecks' Rare Candy has two known generations of the same English
+        # effect. Both must contain all three restrictions and the Stage 2 jump.
+        t = _text(text)
+        if (t.startswith('choose 1 of your basic pokemon in play')
+            and ('stage 2' in t and 'skipping the stage 1' in t)
+            and ("can't use this card during your first turn" in t)
+            and ('put into play this turn' in t or 'on the same turn it came into play' in t)
+            and not ('except ' in t or 'unless ' in t)):
+            return 'rare_candy'
+        raise UnsupportedEffect(f'{name}: texto do Doce Raro divergente')
+    entry = TRAINER_EFFECTS.get(name)
+    if entry is not None and _is_one_of(text, *entry[1]):
+        return entry[0]
+    raise UnsupportedEffect(f'{name}: texto de treinador não reconhecido; conferir versão do catálogo')
 
 
 def _recognize_attack(r: dict, raw_attack: dict):
     name = raw_attack.get('name')
     damage = raw_attack.get('damage')
-    effect = _text(raw_attack.get('effect'))
+    effect = raw_attack.get('effect')
     if name is None:
         return None
-    if (r['name'] == 'Swablu' and name == 'Sing'
-        and raw_attack.get('cost') == 'C' and damage is None
-        and effect == "your opponent's active pokémon is now asleep"):
-        return Attack(name, parse_cost('C'), 0, 'sleep_active')
-    if not isinstance(damage, int) or damage < 0:
-        raise UnsupportedEffect(f'{r["name"]} / {name}: dano dinâmico ou desconhecido')
     cost = parse_cost(raw_attack.get('cost'))
+    if (r['name'] == 'Swablu' and name == 'Sing' and cost == ('colorless',)
+            and damage in (None, 0) and _same_text(effect, "Your opponent's Active Pokémon is now Asleep.")):
+        return Attack(name, cost, 0, 'sleep_active')
+    if type(damage) is not int or damage < 0:
+        raise UnsupportedEffect(f'{r["name"]} / {name}: dano dinâmico ou desconhecido')
     if not effect:
         return Attack(name, cost, damage)
-    # Exact effect-text handlers; when the provider text changes, fail closed.
-    if effect == 'heal 30 damage from this pokémon':
+    if _same_text(effect, 'Heal 30 damage from this Pokémon.'):
         return Attack(name, cost, damage, 'heal_self_30')
-    if effect == 'flip a coin. if heads, this attack does 30 more damage':
+    if _same_text(effect, 'Flip a coin. If heads, this attack does 30 more damage.'):
         return Attack(name, cost, damage, 'coin_bonus_30')
-    # Two meta archetypes: exact card name + move + damage + cost + effect text.
     if (r['name'] == 'Mega Altaria ex' and name == 'Mega Harmony'
-        and damage == 40 and raw_attack.get('cost') == 'PP'
-        and effect == 'this attack does 30 more damage for each of your benched pokémon'):
+        and damage == 40 and cost == ('psychic','psychic')
+        and _same_text(effect, 'This attack does 30 more damage for each of your Benched Pokémon.')):
         return Attack(name, cost, damage, 'bench_plus_30')
     if r['name'] == 'Hoopa ex':
-        if (name == 'Shadow Bullet' and damage == 30 and raw_attack.get('cost') == 'D'
-            and effect == "this attack also does 20 damage to 1 of your opponent's benched pokémon"):
+        if (name == 'Shadow Bullet' and damage == 30 and cost == ('darkness',)
+            and _same_text(effect, "This attack also does 20 damage to 1 of your opponent's Benched Pokémon.")):
             return Attack(name, cost, damage, 'snipe_20_bench')
-        if (name == 'Dynamite Punch' and damage == 100 and raw_attack.get('cost') == 'DDC'
-            and effect == 'this pokémon also does 20 damage to itself'):
+        if (name == 'Dynamite Punch' and damage == 100 and cost == ('darkness','darkness','colorless')
+            and _same_text(effect, 'This Pokémon also does 20 damage to itself.')):
             return Attack(name, cost, damage, 'recoil_20')
     if (r['name'] == 'Mega Absol ex' and name == 'Darkness Claw'
-        and damage == 80 and raw_attack.get('cost') == 'DD'
-        and effect == 'your opponent reveals their hand. choose a supporter card you find there and discard it'):
+        and damage == 80 and cost == ('darkness','darkness')
+        and _same_text(effect, 'Your opponent reveals their hand. Choose a Supporter card you find there and discard it.')):
         return Attack(name, cost, damage, 'discard_opponent_supporter')
-    if (r['name'] == 'Chingling' and name == 'Jingly Noise' and damage == 10
-        and raw_attack.get('cost') == '0'
-        and effect == "during your opponent's next turn, they can't play any item cards from their hand"):
+    if (r['name'] == 'Chingling' and name == 'Jingly Noise'
+        and damage == 10 and cost == ()
+        and _same_text(effect, "During your opponent's next turn, they can't play any Item cards from their hand.")):
         return Attack(name, cost, damage, 'item_lock_next_turn')
-    # Curated single effect, checked by name, base damage and the full known text.
     if (r['name'] == 'Mega Swampert ex' and name == 'Strong-Armed Destroyer'
-        and damage == 150 and raw_attack.get('cost') == 'WWW'
-        and effect == 'discard 2 random energy from among the energy attached to all pokémon (both yours and your opponent\'s)'):
+        and damage == 150 and cost == ('water','water','water')
+        and _same_text(effect, "Discard 2 random Energy from among the Energy attached to all Pokémon (both yours and your opponent's).")):
         return Attack(name, cost, damage, 'discard_2_global_random')
-    raise UnsupportedEffect(f'{r["name"]} / {name}: efeito de ataque não implementado')
+    raise UnsupportedEffect(f'{r["name"]} / {name}: efeito de ataque não reconhecido; conferir texto')
 
 
 def _recognize_ability(r: dict) -> str:
@@ -172,14 +211,14 @@ def _recognize_ability(r: dict) -> str:
     if not data.get('exists'):
         return ''
     name = data.get('name')
-    effect = _text(data.get('effect'))
+    effect = data.get('effect')
     if (r['name'] == 'Greninja' and name == 'Water Shuriken'
-        and effect == "once during your turn, you may do 20 damage to 1 of your opponent's pokémon"):
+        and _same_text(effect, "Once during your turn, you may do 20 damage to 1 of your opponent's Pokémon.")):
         return 'water_shuriken'
     if (r['name'] == 'Darkrai ex' and name == 'Nightmare Aura'
-        and effect == "whenever you attach a [d] energy from your energy zone to this pokémon, do 20 damage to your opponent's active pokémon"):
+        and _same_text(effect, "Whenever you attach a [D] Energy from your Energy Zone to this Pokémon, do 20 damage to your opponent's Active Pokémon.")):
         return 'nightmare_aura'
-    raise UnsupportedEffect(f'{r["name"]}: habilidade {name} ainda não implementada')
+    raise UnsupportedEffect(f'{r["name"]}: habilidade {name} não reconhecida; conferir texto')
 
 
 def compile_card(raw: dict) -> Card:
@@ -199,12 +238,12 @@ def compile_card(raw: dict) -> Card:
         else:
             raise UnsupportedEffect(f'{raw["name"]}: tipo {subtype} não implementado')
         if kind == 'tool':
-            detail = _text(raw.get('card_text'))
-            if (raw['name'] == 'Lucky Egg' and detail ==
-                "if the pokémon this card is attached to is knocked out by damage from an attack from your opponent's pokémon, draw cards until you have 5 cards in your hand"):
+            detail = raw.get('card_text')
+            if (raw['name'] == 'Lucky Egg' and _same_text(detail,
+                "if the pokémon this card is attached to is knocked out by damage from an attack from your opponent's pokémon, draw cards until you have 5 cards in your hand")):
                 return Card(raw['id'],raw['name'],kind,effect='lucky_egg')
-            if (raw['name'] == 'Deceptive Needle' and detail ==
-                "at the end of your turn, if the [ d ] pokémon this card is attached to is in the active spot, do 10 damage to your opponent's active pokémon"):
+            if (raw['name'] == 'Deceptive Needle' and _same_text(detail,
+                "at the end of your turn, if the [ d ] pokémon this card is attached to is in the active spot, do 10 damage to your opponent's active pokémon")):
                 return Card(raw['id'],raw['name'],kind,effect='deceptive_needle')
             raise UnsupportedEffect(f'{raw["name"]}: efeito de ferramenta ainda não implementado')
         return Card(raw['id'], raw['name'], kind, effect=_recognize_trainer(raw))

@@ -46,6 +46,7 @@ def inspect_deck(raw: dict, core: list[dict], gameplay: list[dict]) -> dict:
     blocks: list[str] = []
     notes: list[str] = []
     compiled = []
+    unpayable_attackers = []
     cards = payload['cards']
     energy = payload['energy_types']
     card_count = sum(cards.values())
@@ -73,12 +74,22 @@ def inspect_deck(raw: dict, core: list[dict], gameplay: list[dict]) -> dict:
             try:
                 card = compile_card(battle_ids[cid])
                 compiled.extend([card] * n)
+                if card.kind == 'pokemon' and card.attacks:
+                    for attack in card.attacks:
+                        missing = sorted({t for t in attack.cost if t != 'colorless' and t not in energy})
+                        if missing:
+                            unpayable_attackers.append(f'{name}: {attack.name} requer {", ".join(missing)}')
                 why = ''
             except (UnsupportedEffect, ValueError, KeyError, TypeError) as ex:
                 why = str(ex)
+        raw_card = battle_ids.get(cid) or {}
+        source_details = {'type':raw_card.get('type'), 'subtype':raw_card.get('subtype'),
+                          'stage':raw_card.get('stage'), 'ability':raw_card.get('ability'),
+                          'attacks':raw_card.get('attacks'),
+                          'card_text':raw_card.get('card_text')}
         rows.append({'id':cid,'name':name,'quantity':n,
                      'status':'suportada pelo código' if not why else 'bloqueada',
-                     'reason':why})
+                     'reason':why, 'source_details': source_details if why else None})
     if basics == 0:
         blocks.append('Nenhum Pokémon Básico identificado.')
     if any(n > 2 for n in by_name.values()):
@@ -90,6 +101,8 @@ def inspect_deck(raw: dict, core: list[dict], gameplay: list[dict]) -> dict:
         except (RuleError, TypeError, ValueError) as ex:
             blocks.append(f'Verificação estrutural do motor: {ex}')
 
+    if unpayable_attackers:
+        notes.append('A energia escolhida não permite pagar: ' + '; '.join(unpayable_attackers))
     supported = sum(r['quantity'] for r in rows if r['status']=='suportada pelo código')
     ready = supported == 20 and not blocks
     if ready:

@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.8: two tournament-backed meta presets and audited effects."""
+"""TCG Pocket Lab v0.8.1: two tournament-backed meta presets and audited effects."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -76,7 +76,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.8','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.8.1','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     counts=data['cards']
@@ -94,7 +94,7 @@ def load_payload(data):
     st.session_state.deck_name=str(data.get('name','Meu deck'))[:100]
 
 st.title('🃏 TCG Pocket Lab')
-st.caption(f'v0.8 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
+st.caption(f'v0.8.1 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
 st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
 catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'])
 
@@ -193,7 +193,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8.1)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -217,10 +217,10 @@ with lab_tab:
     st.subheader('Comparar dois decks')
     st.caption('Monte seu deck na aba Meu deck. Depois carregue o adversário para diagnosticar cartas e efeitos necessários.')
     opponent_mode = st.radio('Deck adversário',
-        ['Deck do meta (v0.8)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
+        ['Deck do meta (v0.8.1)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
         horizontal=False, key='opponent_mode')
     opponent_payload = None
-    if opponent_mode == 'Deck do meta (v0.8)':
+    if opponent_mode == 'Deck do meta (v0.8.1)':
         selected_slug = st.selectbox('Escolha o adversário', list(DECKS),
                                      format_func=lambda slug: DECKS[slug]['name'],
                                      key='preset_opponent')
@@ -299,6 +299,19 @@ with lab_tab:
                                        'Situação':x['status'], 'Motivo':x['reason']}
                                       for x in report['cards']],
                                      use_container_width=True, hide_index=True)
+                        details = [
+                            {'ID':x['id'], 'Carta':x['name'],
+                             'Dados originais':json.dumps(x.get('source_details'),ensure_ascii=False,indent=2)}
+                            for x in report['cards'] if x['reason'] and x.get('source_details')
+                        ]
+                        if details:
+                            with st.expander('🧾 Conferir textos originais das cartas bloqueadas'):
+                                st.caption('Registro do catálogo recebido pelo aplicativo; '
+                                           'permite identificar diferenças de texto e versão.')
+                                st.dataframe(details,use_container_width=True,hide_index=True)
+                        for note in report.get('notes', []):
+                            if note.startswith('A energia escolhida'):
+                                st.warning(note)
                     else:
                         st.info('Adicione cartas na aba Meu deck.')
             st.download_button('⬇️ Exportar relatório de compatibilidade',
@@ -361,10 +374,10 @@ with lab_tab:
                            file_name='experimento.json')
     st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.8')
+    st.subheader('Motor de regras v0.8.1')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA básica e replay por semente.')
-    st.markdown('**Novos efeitos técnicos:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
+    st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
     st.warning('Ainda não são universais: condições especiais além de Sono, ferramentas/efeitos fora destes presets, estádios, zona multicolorida, estratégia avançada, tratamento de simultaneidade e validação de eventos competitivos. Não use os resultados de depuração como win rates.')
     st.divider()
     st.subheader('Auditoria do catálogo')

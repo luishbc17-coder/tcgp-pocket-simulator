@@ -22,7 +22,7 @@ class UnsupportedEffect(RuleError):
 
 def parse_cost(value: str | None) -> tuple[str, ...]:
     """PocketDecks uses compact string costs, e.g. WWW or GCC."""
-    if value in (None, '', '0'):
+    if value is None or value == '' or value == '0' or (type(value) is int and value == 0):
         return ()
     if not isinstance(value, str) or any(code not in ENERGY_CODES for code in value):
         raise UnsupportedEffect(f'Unrecognized energy cost: {value!r}')
@@ -157,7 +157,9 @@ class Battle:
         p.retreated = False
         p.retreat_discount = 0
         self._in_turn = True
-        self.draw(self.current, 1)
+        # In Pocket the first player does not draw on the opening turn.
+        if not (self.turn == 0 and self.current == self.first):
+            self.draw(self.current, 1)
         self.log.append(f'Turn {self.turn + 1}, P{self.current}')
 
     def _require_action(self, player: int):
@@ -467,7 +469,7 @@ class Battle:
                 self.log.append(f'{pokemon.card.name} discards 1 random Energy')
         # Hoopa side effects resolve before the KO checks; neither bonus applies
         # type weakness to Bench damage or self-damage.
-        if selected.effect == 'snipe_20_bench' and them.bench:
+        if not self.finished and selected.effect == 'snipe_20_bench' and them.bench:
             target = min(them.bench, key=lambda x:(x.card.hp-x.damage, x.card.hp))
             self._damage_target(1-i, target, 20, i, source='Hoopa ex — Shadow Bullet', attack_damage=True)
         if selected.effect == 'recoil_20':
