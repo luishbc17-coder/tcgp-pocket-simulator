@@ -65,6 +65,7 @@ class InPlay:
     ability_used_turn: int = -1
     tool: Card | None = None
     status: str = ''  # only Asleep currently implemented
+    mirror_shot_pending: bool = False  # next turn: coin on attack attempt
 
     @property
     def max_hp(self) -> int:
@@ -86,6 +87,9 @@ class Player:
     retreated: bool = False
     item_locked: bool = False  # a pending Jingly Noise lock, expires after this player takes a turn
     retreat_discount: int = 0
+    stadium_used: bool = False
+    stadium_action_used: bool = False
+    energy_discard: Counter = field(default_factory=Counter)
 
     def all_in_play(self) -> list[InPlay]:
         return ([self.active] if self.active else []) + self.bench
@@ -129,6 +133,7 @@ class Battle:
         self.finished = False
         self.log: list[str] = []
         self._in_turn = False
+        self.stadium: Card | None = None
         for i, player in enumerate(self.players):
             self._initial_hand(player)
             basics = [c for c in player.hand if c.kind == 'pokemon' and c.stage == 0]
@@ -165,6 +170,8 @@ class Battle:
         p.supporter_used = False
         p.retreated = False
         p.retreat_discount = 0
+        p.stadium_used = False
+        p.stadium_action_used = False
         self._in_turn = True
         # In Pocket the first player does not draw on the opening turn.
         if not (self.turn == 0 and self.current == self.first):
@@ -181,23 +188,39 @@ class Battle:
             if p.deck and len(p.hand) < 10:
                 p.hand.append(p.deck.pop())
 
-    def bench_basic(self, card: Card):
+    def bench_basic(self, card: Card, trigger_bench_ability: bool = False):
         i = self.current
         self._require_action(i)
         p = self.players[i]
         if card not in p.hand or card.kind != 'pokemon' or card.stage != 0 or len(p.bench) >= 3:
             raise RuleError('Cannot bench Pokémon')
         p.hand.remove(card)
-        p.bench.append(InPlay(card, entered_at=self.turn))
+        incoming = InPlay(card, entered_at=self.turn)
+        p.bench.append(incoming)
         self.log.append(f'P{i} benches {card.name}')
+        if trigger_bench_ability and card.ability == 'legendary_drive' and p.active:
+            all_energy = [e for mon in p.all_in_play() if mon is not incoming for e in mon.energy]
+            for mon in p.all_in_play():
+                if mon is not incoming:
+                    mon.energy.clear()
+            incoming.energy.extend(all_energy)
+            old = p.active
+            p.bench.remove(incoming)
+            p.active = incoming
+            old.status = ''
+            p.bench.append(old)
+            self.log.append(f'P{i} Miraidon ex — Legendary Drive: switches with {old.card.name}; transfers {len(all_energy)} Energy')
+        elif trigger_bench_ability and card.ability != 'legendary_drive':
+            raise RuleError('No triggered bench ability on this Pokémon')
 
     def evolve(self, target: InPlay, evolution: Card):
         i = self.current
         self._require_action(i)
         p = self.players[i]
-        if p.turns_taken == 1 or target not in p.all_in_play():
+        boosted = target is p.active and target.card.ability == 'boosted_evolution'
+        if (p.turns_taken == 1 and not boosted) or target not in p.all_in_play():
             raise RuleError('Evolution not allowed now')
-        if (target.entered_at == self.turn or target.evolved_at == self.turn or
+        if ((target.entered_at == self.turn and not boosted) or target.evolved_at == self.turn or
             evolution not in p.hand or evolution.kind != 'pokemon' or
             evolution.stage != target.card.stage + 1 or
             evolution.evolves_from.casefold() != target.card.name.casefold()):
@@ -207,14 +230,17 @@ class Battle:
         p.hand.remove(evolution)
         target.card = evolution
         target.status = ''  # Evolving removes Special Conditions.
+        target.mirror_shot_pending = False
         target.evolved_at = self.turn
         self.log.append(f'P{i} evolves {old_name} -> {evolution.name} ({old_spot})')
+        if target.damage >= target.max_hp:
+            self._damage_target(i, target, 0, 1-i, source=f'Evolution HP change: {evolution.name}')
+            return
         # Ignition triggers only when Charmeleon is played from hand to evolve.
         # It is separate from the regular once-per-turn Energy attachment.
         if (evolution.ability == 'ignition' and p.energy_types == ('fire',)
                 and p.active and p.active.card.element == 'fire'):
-            p.active.energy.append('fire')
-            self.log.append(f'P{i} Charmeleon — Ignition: +1 fire to Active {p.active.card.name}')
+            self._zone_attach(i, p.active, 'fire', 'Charmeleon — Ignition')
 
     def rare_candy(self, candy: Card, target: InPlay, evolution: Card, line_map: dict[str, str]):
         i = self.current
@@ -232,8 +258,21 @@ class Battle:
         p.hand.remove(evolution)
         target.card = evolution
         target.status = ''  # Evolving removes Special Conditions.
+        target.mirror_shot_pending = False
         target.evolved_at = self.turn
         self.log.append(f'P{i} Rare Candy: {old_name} -> {evolution.name} ({old_spot})')
+        if target.damage >= target.max_hp:
+            self._damage_target(i, target, 0, 1-i, source=f'Rare Candy HP change: {evolution.name}')
+            return
+
+    def _zone_attach(self, i: int, target: InPlay, energy: str, source: str):
+        target.energy.append(energy)
+        self.log.append(f'P{i} {source}: +1 {energy} to {target.card.name}')
+        amount = {'nightmare_aura': 20, 'flame_aura': 30}.get(target.card.ability, 0)
+        expected = {'nightmare_aura': 'darkness', 'flame_aura': 'fire'}
+        if amount and energy == expected[target.card.ability]:
+            self._damage_target(1-i, self.players[1-i].active, amount, i,
+                                source=f'{target.card.name} — {target.card.ability}')
 
     def attach(self, target: InPlay):
         i = self.current
@@ -243,15 +282,15 @@ class Battle:
             (self.turn == 0 and i == self.first)):
             raise RuleError('Energy attachment unavailable')
         energy = p.energy_types[0]
-        target.energy.append(energy)
         p.energy_used = True
-        self.log.append(f'P{i} attaches {energy} to {target.card.name}')
-        if target.card.ability == 'nightmare_aura' and energy == 'darkness':
-            self._damage_target(1-i, self.players[1-i].active, 20, i, source='Darkrai ex — Nightmare Aura')
+        self._zone_attach(i, target, energy, 'manual energy')
 
     @staticmethod
-    def attack_damage_after_tool(pokemon: InPlay, amount: int) -> int:
+    def attack_damage_after_tool(pokemon: InPlay, amount: int, attacker_card: Card | None = None) -> int:
         """Only attacks (not abilities or self damage) are reduced by Eviolite."""
+        if (attacker_card is not None and attacker_card.name.casefold().endswith(' ex')
+                and pokemon.card.ability == 'safeguard_ex'):
+            return 0
         if (pokemon.tool and pokemon.tool.effect == 'eviolite'
                 and pokemon.card.stage == 0):
             return max(0, amount - 20)
@@ -266,13 +305,14 @@ class Battle:
         if pokemon is None or self.finished or amount < 0:
             return
         if attack_damage and victim != scorer:
-            amount = self.attack_damage_after_tool(pokemon, amount)
+            amount = self.attack_damage_after_tool(pokemon, amount, self.players[scorer].active.card if self.players[scorer].active else None)
         pokemon.damage += amount
         self.log.append(f'{source}: {amount} damage to P{victim} {pokemon.card.name}')
         if pokemon.damage >= pokemon.max_hp:
             if self.players[victim].active is pokemon:
                 self._knockout(victim, scorer, from_attack=attack_damage)
             elif pokemon in self.players[victim].bench:
+                self.players[victim].energy_discard.update(pokemon.energy)
                 if (attack_damage and victim != scorer and pokemon.tool is not None and
                         pokemon.tool.effect == 'lucky_egg'):
                     self.draw(victim, max(0, 5-len(self.players[victim].hand)))
@@ -307,15 +347,20 @@ class Battle:
             if own.energy_types != ('lightning',):
                 raise RuleError('Volt Charge requires Lightning Energy Zone')
             pokemon.ability_used_turn = self.turn
-            pokemon.energy.append('lightning')
-            self.log.append(f'P{i} Magneton — Volt Charge: +1 lightning to {pokemon.card.name}')
+            self._zone_attach(i, pokemon, 'lightning', 'Magneton — Volt Charge')
         elif effect == 'ice_maker':
             if (own.energy_types != ('water',) or not own.active
                     or own.active.card.element != 'water'):
                 raise RuleError('Ice Maker requires Active Water Pokémon and Water Energy Zone')
             pokemon.ability_used_turn = self.turn
-            own.active.energy.append('water')
-            self.log.append(f'P{i} Baxcalibur — Ice Maker: +1 water to Active {own.active.card.name}')
+            self._zone_attach(i, own.active, 'water', 'Baxcalibur — Ice Maker')
+        elif effect == 'roar_in_unison':
+            if own.energy_types != ('darkness',):
+                raise RuleError('Roar in Unison requires Darkness Energy Zone')
+            pokemon.ability_used_turn = self.turn
+            self._zone_attach(i, pokemon, 'darkness', 'Hydreigon — Roar in Unison')
+            self._zone_attach(i, pokemon, 'darkness', 'Hydreigon — Roar in Unison')
+            self._damage_target(i, pokemon, 30, 1-i, source='Hydreigon — Roar in Unison recoil')
         else:
             raise RuleError('No activatable ability handler for this Pokémon')
 
@@ -327,11 +372,37 @@ class Battle:
                 target not in p.all_in_play() or target.tool is not None):
             raise RuleError('Illegal Pokémon Tool attachment')
         if tool.effect not in ('lucky_egg', 'deceptive_needle',
-                               'giant_cape', 'eviolite', 'inflatable_boat'):
+                               'giant_cape', 'eviolite', 'inflatable_boat', 'small_balloon'):
             raise UnsupportedEffect('Pokémon Tool effect has no handler')
         p.hand.remove(tool)
         target.tool = tool
         self.log.append(f'P{i} attaches {tool.name} to {target.card.name}')
+
+    def play_stadium(self, card: Card):
+        i = self.current
+        self._require_action(i)
+        p = self.players[i]
+        if (card.kind != 'stadium' or card not in p.hand or p.stadium_used
+                or (self.stadium and self.stadium.name == card.name)
+                or card.effect not in ('training_area','rainbow_cave')):
+            raise RuleError('Illegal Stadium card play')
+        previous = self.stadium
+        p.hand.remove(card)
+        p.stadium_used = True
+        self.stadium = card
+        self.log.append(f'P{i} stadium: {card.name}' + (f' (replaces {previous.name})' if previous else ''))
+
+    def use_stadium(self):
+        """Rainbow Cave advances the Energy Zone; with a single-type Zone, the
+        generated type is necessarily unchanged. This does NOT enable mixed Zones.
+        """
+        i = self.current
+        self._require_action(i)
+        p = self.players[i]
+        if not self.stadium or self.stadium.effect != 'rainbow_cave' or p.stadium_action_used:
+            raise RuleError('Rainbow Cave unavailable or already used this turn')
+        p.stadium_action_used = True
+        self.log.append(f'P{i} Rainbow Cave re-generates {p.energy_types[0]} (mono-type Energy Zone)')
 
     def play_trainer(self, card: Card, target: InPlay | None = None):
         i = self.current
@@ -370,6 +441,50 @@ class Battle:
             p.deck.extend(viewed)
             self.rng.shuffle(p.deck)
             self.log.append(f"P{i} Serena's Choice: selects {chosen.name} from {len(viewed)+1} cards")
+        elif card.effect in ('lisia','clemont'):
+            if card.effect == 'lisia':
+                matching = [x for x in p.deck if x.kind == 'pokemon' and x.stage == 0 and x.hp <= 50]
+            else:
+                matching = [x for x in p.deck if x.name in ('Magneton', 'Heliolisk', "Clemont's Backpack")]
+            if not matching:
+                raise RuleError(f'{card.name}: no eligible cards/space')
+            p.hand.remove(card)
+            for _ in range(min(2,len(matching),10-len(p.hand))):
+                chosen = self.rng.choice(matching)
+                matching.remove(chosen)
+                p.deck.remove(chosen)
+                p.hand.append(chosen)
+                self.log.append(f'P{i} {card.name}: searches {chosen.name}')
+        elif card.effect == 'may':
+            matching = [x for x in p.deck if x.kind == 'pokemon']
+            if not matching:
+                raise RuleError('May needs Pokémon in deck and hand space')
+            p.hand.remove(card)
+            drawn = []
+            for _ in range(min(2,len(matching),10-len(p.hand))):
+                chosen = self.rng.choice(matching)
+                matching.remove(chosen)
+                p.deck.remove(chosen)
+                p.hand.append(chosen)
+                drawn.append(chosen)
+            # Shuffle as many Pokémon back as were actually found.
+            for _ in drawn:
+                returns = [x for x in p.hand if x.kind == 'pokemon']
+                if not returns:
+                    raise RuleError('May cannot return searched Pokémon')
+                chosen = min(returns, key=lambda x:(x.stage, x.hp))
+                p.hand.remove(chosen)
+                p.deck.append(chosen)
+            self.rng.shuffle(p.deck)
+            self.log.append(f'P{i} May searches {len(drawn)} Pokémon and returns {len(drawn)}')
+        elif card.effect == 'flame_patch':
+            if (not p.active or p.active.card.element != 'fire'
+                    or p.energy_discard['fire'] <= 0):
+                raise RuleError('Flame Patch requires Active Fire Pokémon and discarded Fire Energy')
+            p.hand.remove(card)
+            p.energy_discard['fire'] -= 1
+            p.active.energy.append('fire')  # discard pile != Energy Zone; no Flame Aura trigger
+            self.log.append(f'P{i} Flame Patch: +1 discarded Fire to {p.active.card.name}')
         elif card.effect == 'copycat':
             p.hand.remove(card)
             shuffled_count = len(p.hand)
@@ -392,6 +507,24 @@ class Battle:
             target.status = ''
             p.hand.remove(card)
             self.log.append(f'P{i} Pokémon Center Lady heals {amount} from {target.card.name}, clears status')
+        elif card.effect in ('sabrina','blues_provocation'):
+            if card.effect == 'blues_provocation' and not any(
+                    m.card.name in ('Venusaur','Charizard','Blastoise','Pidgeot') for m in p.all_in_play()):
+                raise RuleError("Blue's Provocation requires a named Pokémon in play")
+            if not opp.active or not opp.bench:
+                raise RuleError('Opponent has no Benched Pokémon for switching')
+            if target is None:
+                target = max(opp.bench,key=lambda x:(len(x.energy),x.max_hp-x.damage)) if card.effect == 'sabrina' else min(opp.bench,key=lambda x:(x.max_hp-x.damage,x.card.points))
+            if target not in opp.bench:
+                raise RuleError('Switch target must be opposing Benched Pokémon')
+            p.hand.remove(card)
+            old = opp.active
+            old.status = ''
+            old.mirror_shot_pending = False
+            opp.bench.remove(target)
+            opp.active = target
+            opp.bench.append(old)
+            self.log.append(f'P{i} {card.name}: switches opponent {old.card.name} -> {target.card.name}')
         elif card.effect == 'repel':
             if not opp.active or opp.active.card.stage != 0 or not opp.bench:
                 raise RuleError('Repel requires opposing Basic Active and Bench')
@@ -403,6 +536,7 @@ class Battle:
             p.hand.remove(card)
             old=opp.active
             old.status=''
+            old.mirror_shot_pending = False
             opp.bench.remove(target)
             opp.active=target
             opp.bench.append(old)
@@ -430,6 +564,7 @@ class Battle:
             opp.active = target
             if old:
                 old.status = ''
+                old.mirror_shot_pending = False
                 opp.bench.append(old)
             self.log.append(f'P{i} Cyrus switches P{1-i} Active {old.card.name if old else "none"} -> {target.card.name} ({target.damage} damage; opposing Bench)')
         elif card.effect == 'lucky_ice_pop':
@@ -451,8 +586,15 @@ class Battle:
         elif card.effect == 'field_blower':
             found = [x for x in opp.all_in_play() if x.tool is not None] or [
                 x for x in p.all_in_play() if x.tool is not None]
+            if not found and self.stadium is not None:
+                old_stadium = self.stadium.name
+                self.stadium = None
+                p.hand.remove(card)
+                self.log.append(f'P{i} Field Blower: discards stadium {old_stadium}')
+                self.log.append(f'P{i} plays {card.name}')
+                return
             if not found:
-                raise RuleError('Field Blower has no Pokémon Tool to discard')
+                raise RuleError('Field Blower has no Pokémon Tool or Stadium to discard')
             if target is None:
                 target = found[0]
             if target not in found:
@@ -478,12 +620,16 @@ class Battle:
             raise RuleError('Illegal retreat')
         boat = bool(p.active.tool and p.active.tool.effect == 'inflatable_boat'
                     and p.active.card.element == 'water')
-        need = max(0, p.active.card.retreat - p.retreat_discount - int(boat))
+        balloon = bool(p.active.tool and p.active.tool.effect == 'small_balloon'
+                       and p.active.card.stage == 0)
+        need = max(0, p.active.card.retreat - p.retreat_discount - int(boat) - int(balloon))
         if len(p.active.energy) < need:
             raise RuleError('Not enough energy to retreat')
+        p.energy_discard.update(p.active.energy[:need])
         del p.active.energy[:need]
         current = p.active
         current.status = ''  # Moving to Bench removes Special Conditions.
+        current.mirror_shot_pending = False
         p.bench.remove(incoming)
         p.active = incoming
         p.bench.append(current)
@@ -508,11 +654,19 @@ class Battle:
             raise RuleError('An Asleep Pokémon cannot attack')
         if not self.can_pay_energy(me.active, selected):
             raise RuleError('Attack energy cost unpaid')
+        if me.active.mirror_shot_pending:
+            me.active.mirror_shot_pending = False
+            heads = self.rng.choice((True,False))
+            self.log.append(f'P{i} Mirror Shot restriction: {"heads" if heads else "tails"}')
+            if not heads:
+                self.end_turn()
+                return
         valid = ('', 'discard_2_global_random', 'heal_self_30', 'coin_bonus_30',
                  'bench_plus_30', 'snipe_20_bench', 'recoil_20',
                  'discard_opponent_supporter', 'item_lock_next_turn', 'sleep_active',
                  'both_benches_plus_20', 'fire_extra_2_plus_60', 'recoil_50',
-                 'water_snipe_130_discard')
+                 'water_snipe_130_discard','mirror_shot',
+                 'lightning_each_plus_20','basic_plus_50','discard_all_self_energy')
         if selected.effect not in valid:
             raise UnsupportedEffect('Attack effect requires handler')
         if selected.effect == 'water_snipe_130_discard':
@@ -521,6 +675,7 @@ class Battle:
             if target not in them.all_in_play():
                 raise RuleError('Diving Icicles target must be an opposing Pokémon in play')
             count = me.active.energy.count('water')
+            me.energy_discard.update(['water']*count)
             me.active.energy = [e for e in me.active.energy if e != 'water']
             self.log.append(f'P{i} {me.active.card.name} Diving Icicles: discards {count} Water Energy')
             amount = 130
@@ -542,19 +697,28 @@ class Battle:
             damage += 30 * len(me.bench)
         if selected.effect == 'both_benches_plus_20':
             damage += 20 * (len(me.bench) + len(them.bench))
+        if selected.effect == 'lightning_each_plus_20':
+            damage += 20 * me.active.energy.count('lightning')
+        if selected.effect == 'basic_plus_50' and them.active.card.stage == 0:
+            damage += 50
+        if (self.stadium and self.stadium.effect == 'training_area'
+                and me.active.card.stage == 1 and damage > 0):
+            damage += 10
         if selected.effect == 'fire_extra_2_plus_60':
             # Blazing Beatdown needs two *additional* Fire on top of RR cost.
             if Counter(me.active.energy)['fire'] >= 4:
                 damage += 60
         if damage > 0 and them.active.card.weakness == me.active.card.element:
             damage += 20
-        damage = self.attack_damage_after_tool(them.active, damage)
+        damage = self.attack_damage_after_tool(them.active, damage, me.active.card)
         them.active.damage += damage
         self.log.append(f'P{i} {me.active.card.name} uses {selected.name}, {damage} damage to P{1-i} Active {them.active.card.name}')
         if selected.effect == 'item_lock_next_turn':
             them.item_locked = True
         if selected.effect == 'sleep_active':
             them.active.status = 'asleep'
+        if selected.effect == 'mirror_shot':
+            them.active.mirror_shot_pending = True
         if selected.effect == 'discard_opponent_supporter':
             supporters = [c for c in them.hand if c.kind == 'supporter']
             if supporters:
@@ -573,20 +737,26 @@ class Battle:
                 if not pool:
                     break
                 pokemon = self.rng.choice(pool)
-                pokemon.energy.pop(self.rng.randrange(len(pokemon.energy)))
+                discarded = pokemon.energy.pop(self.rng.randrange(len(pokemon.energy)))
+                owner_idx = next(idx for idx,pl in enumerate(self.players) if pokemon in pl.all_in_play())
+                self.players[owner_idx].energy_discard[discarded] += 1
                 self.log.append(f'{pokemon.card.name} discards 1 random Energy')
         # Resolve *all* attack damage before checking KOs. Pocket treats KOs
         # from the same attack (including recoil and Bench damage) together;
         # stopping after a single first KO produced impossible survivors.
         if selected.effect == 'snipe_20_bench' and them.bench:
             target = min(them.bench, key=lambda x: (x.max_hp-x.damage, x.max_hp))
-            bench_damage = self.attack_damage_after_tool(target, 20)
+            bench_damage = self.attack_damage_after_tool(target, 20, me.active.card)
             target.damage += bench_damage
             self.log.append(f'Hoopa ex — Shadow Bullet: {bench_damage} damage to P{1-i} {target.card.name}')
         if selected.effect in ('recoil_20', 'recoil_50'):
             recoil = 20 if selected.effect == 'recoil_20' else 50
             me.active.damage += recoil
             self.log.append(f'P{i} {me.active.card.name} recoil: {recoil} damage')
+        if selected.effect == 'discard_all_self_energy':
+            me.energy_discard.update(me.active.energy)
+            self.log.append(f'P{i} {me.active.card.name}: discards all {len(me.active.energy)} Energy')
+            me.active.energy.clear()
         self._resolve_attack_knockouts()
         self.end_turn()
 
@@ -612,6 +782,7 @@ class Battle:
                 else:
                     owner.bench.remove(pokemon)
                     spot = 'Bench'
+                owner.energy_discard.update(pokemon.energy)
                 if pokemon.tool and pokemon.tool.effect == 'lucky_egg' and victim != self.current:
                     self.draw(victim, max(0, 5-len(owner.hand)))
                     self.log.append(f'P{victim} Lucky Egg draws to {len(owner.hand)} cards')
@@ -641,6 +812,7 @@ class Battle:
         if not p.active:
             raise RuleError('No active Pokémon to KO')
         knocked = p.active
+        p.energy_discard.update(knocked.energy)
         p.active = None
         if (from_attack and victim != scorer and knocked.tool is not None and
                 knocked.tool.effect == 'lucky_egg'):
@@ -674,6 +846,18 @@ class Battle:
             self.draw(self.current, 1)
             self.log.append(f'P{self.current} {p.active.card.name} — Legendary Pulse: '
                             f'draws {len(p.hand)-before} card(s)')
+        # Bad Dreams fires at the end of either player's turn, before Asleep recovery.
+        if not self.finished:
+            for owner_idx, owner in enumerate(self.players):
+                for mon in list(owner.all_in_play()):
+                    foe_active = self.players[1-owner_idx].active
+                    if (not self.finished and mon.card.ability == 'bad_dreams'
+                            and foe_active and foe_active.status == 'asleep'):
+                        self._damage_target(1-owner_idx, foe_active, 20, owner_idx,
+                                            source='Darkrai — Bad Dreams')
+        # Mirror Shot's restriction ends with the defending player's turn.
+        for mon in self.players[self.current].all_in_play():
+            mon.mirror_shot_pending = False
         # Special Conditions check between turns. Asleep gets one coin flip per
         # active affected Pokémon, even on the turn it became Asleep.
         if not self.finished:
@@ -709,6 +893,10 @@ class RuleAgent:
         a baseline policy for debugging, not a strong/optimal player.
         """
         damage = attack.damage
+        if attack.effect == 'lightning_each_plus_20':
+            damage += 20 * attacker.energy.count('lightning')
+        if attack.effect == 'basic_plus_50' and opponent.card.stage == 0:
+            damage += 50
         if attack.effect == 'bench_plus_30':
             damage += 30 * len(bench)
         if attack.effect == 'both_benches_plus_20':
@@ -780,7 +968,11 @@ class RuleAgent:
                 battle.play_trainer(c)
         for c in list(p.hand):
             if c.kind == 'pokemon' and c.stage == 0 and len(p.bench) < 3:
-                battle.bench_basic(c)
+                battle.bench_basic(c, trigger_bench_ability=(c.ability == 'legendary_drive' and sum(len(x.energy) for x in p.all_in_play()) >= 2))
+        for card in list(p.hand):
+            if card.kind == 'stadium' and not p.stadium_used and (not battle.stadium or battle.stadium.name != card.name):
+                battle.play_stadium(card)
+                break
         # Apply field-blower only if the opponent has a useful Tool to remove.
         for c in list(p.hand):
             if c.effect == 'field_blower' and not p.item_locked and any(x.tool for x in battle.players[1-i].all_in_play()):
@@ -808,9 +1000,19 @@ class RuleAgent:
             for target in p.all_in_play():
                 if (evo.stage in (1,2) and evo.stage == target.card.stage+1 and
                     evo.evolves_from.casefold() == target.card.name.casefold() and
-                    p.turns_taken > 1 and target.entered_at != battle.turn and target.evolved_at != battle.turn):
+                    ((p.turns_taken > 1 and target.entered_at != battle.turn) or (target is p.active and target.card.ability == 'boosted_evolution'))
+                    and target.evolved_at != battle.turn):
                     battle.evolve(target,evo)
                     break
+        if battle.finished:
+            battle.end_turn()
+            return
+        # Use recovered Fire Energy on Active Fire attackers without treating it
+        # as Energy-Zone attachment (Flame Aura must NOT activate).
+        for c in list(p.hand):
+            if (c.effect == 'flame_patch' and not p.item_locked and p.active
+                    and p.active.card.element == 'fire' and p.energy_discard['fire'] > 0):
+                battle.play_trainer(c)
         # Activated abilities: energy acceleration and Water Shuriken.
         for pokemon in list(p.all_in_play()):
             if pokemon.ability_used_turn == battle.turn:
@@ -829,6 +1031,9 @@ class RuleAgent:
             elif (pokemon.card.ability == 'ice_maker' and p.energy_types == ('water',)
                   and p.active and p.active.card.element == 'water'):
                 battle.use_ability(pokemon)
+            elif (pokemon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
+                  and pokemon.damage + 30 < pokemon.max_hp):
+                battle.use_ability(pokemon)
         for c in list(p.hand):
             if c.effect == 'research' and len(p.hand) <= 8 and p.deck:
                 battle.play_trainer(c)
@@ -837,11 +1042,32 @@ class RuleAgent:
             if c.effect == 'serenas_choice' and not p.supporter_used and p.deck:
                 battle.play_trainer(c)
                 break
+        for c in list(p.hand):
+            if c.effect in ('lisia','clemont','may') and not p.supporter_used and p.deck:
+                match = {'lisia': lambda x: x.kind=='pokemon' and x.stage==0 and x.hp<=50,
+                         'clemont': lambda x: x.name in ('Magneton','Heliolisk',"Clemont's Backpack"),
+                         'may': lambda x: x.kind=='pokemon'}[c.effect]
+                if any(match(x) for x in p.deck):
+                    battle.play_trainer(c)
+                    break
         # A conservative baseline for other supported Supporters and healing items.
         for c in list(p.hand):
             if c.effect == 'cyrus' and not p.supporter_used and any(x.damage for x in battle.players[1-i].bench):
                 battle.play_trainer(c)
                 break
+        for c in list(p.hand):
+            if c.effect == 'blues_provocation' and not p.supporter_used and battle.players[1-i].bench \
+                    and any(mon.card.name in ('Venusaur','Charizard','Blastoise','Pidgeot') for mon in p.all_in_play()):
+                target = min(battle.players[1-i].bench, key=lambda x:x.max_hp-x.damage)
+                if p.active and any(battle.can_pay_energy(p.active,a) and a.damage >= target.max_hp-target.damage for a in p.active.card.attacks):
+                    battle.play_trainer(c,target=target)
+                    break
+        for c in list(p.hand):
+            if c.effect == 'sabrina' and not p.supporter_used and battle.players[1-i].bench and battle.players[1-i].active:
+                foe=battle.players[1-i]
+                if len(foe.active.energy)>=2 and max(len(x.energy) for x in foe.bench)<len(foe.active.energy):
+                    battle.play_trainer(c)
+                    break
         for c in list(p.hand):
             if c.effect == 'copycat' and not p.supporter_used and len(p.hand) <= 3 and len(battle.players[1-i].hand) > len(p.hand):
                 battle.play_trainer(c)
@@ -857,7 +1083,7 @@ class RuleAgent:
         # New basics obtained after draw.
         for c in list(p.hand):
             if c.kind == 'pokemon' and c.stage == 0 and len(p.bench) < 3:
-                battle.bench_basic(c)
+                battle.bench_basic(c, trigger_bench_ability=(c.ability == 'legendary_drive' and sum(len(x.energy) for x in p.all_in_play()) >= 2))
         if not p.energy_used and not (battle.turn == 0 and battle.first == i):
             # Single-type energy policy: favor a Pokémon with a payable attack.
             target = self.select_energy_target(p)

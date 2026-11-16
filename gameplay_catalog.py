@@ -138,6 +138,24 @@ TRAINER_EFFECTS = {
     'Field Blower': ('field_blower', (
         "Discard a Pokémon Tool card from a Pokémon (yours or your opponent's) , or discard a Stadium card in play.",
     )),
+    'Flame Patch': ('flame_patch', (
+        'Attach a [ R ] Energy from your discard pile to your Active [ R ] Pokémon.',
+    )),
+    'Sabrina': ('sabrina', (
+        "Switch out your opponent's Active Pokémon to the Bench. (Your opponent chooses the new Active Pokémon.)",
+    )),
+    'Blue\'s Provocation': ('blues_provocation', (
+        "You can use this card only if you have Venusaur, Charizard, Blastoise, or Pidgeot in play. Switch in 1 of your opponent's Benched Pokémon to the Active Spot.",
+    )),
+    'May': ('may', (
+        'Put 2 random Pokémon from your deck into your hand. For each Pokémon you put into your hand in this way, choose a Pokémon to shuffle from your hand into your deck.',
+    )),
+    'Lisia': ('lisia', (
+        'Put 2 random Basic Pokémon with 50 HP or less from your deck into your hand.',
+    )),
+    'Clemont': ('clemont', (
+        "Put 2 random cards from among Magneton, Heliolisk, and Clemont's Backpack from your deck into your hand.",
+    )),
     'Lucky Ice Pop': ('lucky_ice_pop', (
         'Heal 20 damage from your Active Pokémon. If you healed any damage in this way, flip a coin. If heads, put this Lucky Ice Pop into your hand instead of discarding it.',
         'Heal 20 damage from your Active Pokémon. If you healed any damage in this way, flip a coin. If heads, put this Lucky Ice Pop into your hand instead of the discard pile.',
@@ -183,6 +201,8 @@ def _recognize_attack(r: dict, raw_attack: dict):
         raise UnsupportedEffect(f'{r["name"]} / {name}: dano dinâmico ou desconhecido')
     if not effect:
         return Attack(name, cost, damage)
+    if _same_text(effect, "Your opponent's Active Pokémon is now Asleep."):
+        return Attack(name,cost,damage,'sleep_active')
     if _same_text(effect, 'Heal 30 damage from this Pokémon.'):
         return Attack(name, cost, damage, 'heal_self_30')
     if _same_text(effect, 'Flip a coin. If heads, this attack does 30 more damage.'):
@@ -201,6 +221,26 @@ def _recognize_attack(r: dict, raw_attack: dict):
         and damage == 250 and cost == ('fire','fire','fire','colorless')
         and _same_text(effect, 'This Pokémon also does 50 damage to itself.')):
         return Attack(name, cost, damage, 'recoil_50')
+    if (r['name'] == 'Magnezone' and name == 'Mirror Shot' and damage == 90
+        and cost == ('lightning','colorless','colorless')
+        and _same_text(effect, "During your opponent's next turn, if the Defending Pokémon tries to use an attack, your opponent flips a coin. If tails, that attack doesn't happen.")):
+        return Attack(name,cost,damage,'mirror_shot')
+    if (r['name'] == 'Miraidon ex' and name == 'Hadron Ray' and damage == 20
+        and cost == ('colorless','colorless','colorless')
+        and _same_text(effect, 'This attack does 20 more damage for each [L] Energy attached to this Pokémon.')):
+        return Attack(name,cost,damage,'lightning_each_plus_20')
+    if (r['name'] == 'Hydreigon' and name == 'Hyper Ray' and damage == 130
+        and cost == ('darkness','darkness','darkness')
+        and _same_text(effect, 'Discard all Energy from this Pokémon.')):
+        return Attack(name,cost,damage,'discard_all_self_energy')
+    if (r['name'] == 'Umbreon' and name == 'Moonlit Raid' and damage == 30
+        and cost == ('darkness',)
+        and _same_text(effect, "If your opponent's Active Pokémon is a Basic Pokémon, this attack does 50 more damage.")):
+        return Attack(name,cost,damage,'basic_plus_50')
+    if (r['name'] in ('Espeon','Igglybuff')
+        and name in ('Hypnoblast','Sleepy Lullaby')
+        and _same_text(effect, "Your opponent's Active Pokémon is now Asleep.")):
+        return Attack(name,cost,damage,'sleep_active')
     if (r['name'] == 'Mega Altaria ex' and name == 'Mega Harmony'
         and damage == 40 and cost == ('psychic','psychic')
         and _same_text(effect, 'This attack does 30 more damage for each of your Benched Pokémon.')):
@@ -251,6 +291,24 @@ def _recognize_ability(r: dict) -> str:
             'Once during your turn, when you play this Pokémon from your hand to evolve 1 of your Pokémon, you may take a [R] Energy from your Energy Zone and attach it to your Active [R] Pokémon.',
             'Once during your turn, when you play this Pokémon from your hand to evolve 1 of your Pokémon, you may take a Fire Energy from your Energy Zone and attach it to your Active Fire Pokémon.')):
         return 'ignition'
+    if (r['name'] == 'Charizard' and name == 'Flame Aura'
+        and _same_text(effect, "Whenever you attach a [R] Energy from your Energy Zone to this Pokémon, do 30 damage to your opponent's Active Pokémon.")):
+        return 'flame_aura'
+    if (r['name'] == 'Oricorio' and name == 'Safeguard'
+        and _same_text(effect, "Prevent all damage done to this Pokémon by attacks from your opponent's Pokémon ex.")):
+        return 'safeguard_ex'
+    if (r['name'] == 'Miraidon ex' and name == 'Legendary Drive'
+        and _same_text(effect, "Once during your turn, when you put this Pokémon from your hand onto your Bench, you may switch it with your Active Pokémon. If you do, move all of your Energy in play to this Pokémon.")):
+        return 'legendary_drive'
+    if (r['name'] == 'Eevee' and name == 'Boosted Evolution'
+        and _same_text(effect, "As long as this Pokémon is in the Active Spot, it can evolve during your first turn or the turn you play it.")):
+        return 'boosted_evolution'
+    if (r['name'] == 'Darkrai' and name == 'Bad Dreams'
+        and _same_text(effect, "At the end of each turn, if your opponent's Active Pokémon is Asleep, do 20 damage to that Pokémon.")):
+        return 'bad_dreams'
+    if (r['name'] == 'Hydreigon' and name == 'Roar in Unison'
+        and _same_text(effect, "Once during your turn, you may take 2 [D] Energy from your Energy Zone and attach it to this Pokémon. If you do, do 30 damage to this Pokémon.")):
+        return 'roar_in_unison'
     if (r['name'] == 'Greninja' and name == 'Water Shuriken'
         and _same_text(effect, "Once during your turn, you may do 20 damage to 1 of your opponent's Pokémon.")):
         return 'water_shuriken'
@@ -274,8 +332,18 @@ def compile_card(raw: dict) -> Card:
             kind = 'item'
         elif subtype == 'tool':
             kind = 'tool'
+        elif subtype == 'stadium':
+            kind = 'stadium'
         else:
             raise UnsupportedEffect(f'{raw["name"]}: tipo {subtype} não implementado')
+        if kind == 'stadium':
+            if raw['name'] == 'Rainbow Cave' and _same_text(raw.get('card_text'),
+                    'Once during each player\'s turn, that player may discard the Energy that has been generated in their Energy Zone. If they do, the next Energy is produced.'):
+                return Card(raw['id'], raw['name'], kind, effect='rainbow_cave')
+            if raw['name'] == 'Training Area' and _same_text(raw.get('card_text'),
+                    "Attacks used by Stage 1 Pokémon in play (both yours and your opponent's) do +10 damage to the opponent's Active Pokémon."):
+                return Card(raw['id'], raw['name'], kind, effect='training_area')
+            raise UnsupportedEffect(f"{raw['name']}: efeito de Stadium não reconhecido")
         if kind == 'tool':
             detail = raw.get('card_text')
             if (raw['name'] == 'Lucky Egg' and _same_text(detail,
@@ -294,6 +362,9 @@ def compile_card(raw: dict) -> Card:
                     'The Retreat Cost of the [ W ] Pokémon this card is attached to is 1 less.',
                     'The Retreat Cost of the {W} Pokémon this card is attached to is 1 less.')):
                 return Card(raw['id'],raw['name'],kind,effect='inflatable_boat')
+            if (raw['name'] == 'Small Balloon' and _same_text(detail,
+                    'The Retreat Cost of the Basic Pokémon this card is attached to is 1 less.')):
+                return Card(raw['id'], raw['name'], kind, effect='small_balloon')
             raise UnsupportedEffect(f'{raw["name"]}: efeito de ferramenta ainda não implementado')
         return Card(raw['id'], raw['name'], kind, effect=_recognize_trainer(raw))
     if raw.get('type') != 'Pokémon':

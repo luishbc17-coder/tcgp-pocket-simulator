@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.3.1: persistent tab navigation and meta diagnosis."""
+"""TCG Pocket Lab v0.9.3.2: source-backed card effect expansion and preserved tabs."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -791,7 +791,7 @@ with lab_tab:
         st.info('A configuração mudou desde o último teste. Execute novamente para atualizar os resultados.')
 
 with motor_tab:
-    st.subheader('Motor de regras v0.9.3.1 — expansão incremental')
+    st.subheader('Motor de regras v0.9.3.2 — expansão incremental')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')

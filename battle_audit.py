@@ -86,15 +86,18 @@ def snapshot(game: Battle, action: str) -> dict:
             'hp_remaining': p.max_hp - p.damage,
             'energy': list(p.energy), 'status': p.status,
             'tool': p.tool.name if p.tool else None,
+            'mirror_shot_pending': p.mirror_shot_pending,
             'entered_at': p.entered_at, 'evolved_at': p.evolved_at,
         }
     return {
         'action': action, 'half_turn': game.turn, 'active_player': game.current,
         'first_player': game.first, 'in_turn': game._in_turn,
         'finished': game.finished, 'winner': game.winner,
+        'stadium': game.stadium.name if game.stadium else None,
         'players': [{
             'points': p.points, 'turns_taken': p.turns_taken,
             'hand_count': len(p.hand), 'deck_count': len(p.deck),
+            'discarded_energy': dict(p.energy_discard),
             'active': pokemon_state(p.active),
             'bench': [pokemon_state(c) for c in p.bench],
         } for p in game.players],
@@ -105,7 +108,7 @@ class AuditedBattle(Battle):
     """Check core invariants after each public action, optionally store snapshots."""
     AUDIT_ACTIONS = (
         'begin_turn', 'bench_basic', 'evolve', 'rare_candy', 'attach',
-        'use_ability', 'equip_tool', 'play_trainer', 'retreat', 'attack', 'end_turn'
+        'use_ability', 'equip_tool', 'play_stadium', 'use_stadium', 'play_trainer', 'retreat', 'attack', 'end_turn'
     )
 
     def __init__(self, *args, collect_trace=False, **kwargs):

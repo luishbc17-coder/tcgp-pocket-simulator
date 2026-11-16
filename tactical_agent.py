@@ -135,6 +135,8 @@ class TacticalAgent(RuleAgent):
             return None
         boat = int(bool(p.active.tool and p.active.tool.effect == 'inflatable_boat'
                         and p.active.card.element == 'water'))
+        boat += int(bool(p.active.tool and p.active.tool.effect == 'small_balloon'
+                        and p.active.card.stage == 0))
         if len(p.active.energy) + p.retreat_discount + boat < p.active.card.retreat:
             return None
         foe = battle.players[1-battle.current].active
@@ -163,11 +165,15 @@ class TacticalAgent(RuleAgent):
                 battle.play_trainer(card)
         for card in list(p.hand):
             if card.kind == 'pokemon' and card.stage == 0 and len(p.bench) < 3:
-                battle.bench_basic(card)
+                battle.bench_basic(card, trigger_bench_ability=(card.ability == 'legendary_drive' and sum(len(x.energy) for x in p.all_in_play()) >= 2))
         for card in list(p.hand):
             if card.effect == 'field_blower' and not p.item_locked and any(x.tool for x in foe.all_in_play()):
                 battle.play_trainer(card)
 
+        for card in list(p.hand):
+            if card.kind == 'stadium' and not p.stadium_used and (not battle.stadium or battle.stadium.name != card.name):
+                battle.play_stadium(card)
+                break
         # Tool attachment: Deceptive Needle has an effect only on a Darkness
         # Pokemon in the Active Spot; don't waste it on a non-Dark Pokemon.
         for card in [c for c in list(p.hand) if c.kind == 'tool']:
@@ -183,6 +189,11 @@ class TacticalAgent(RuleAgent):
                 else:
                     target = next((x for x in p.bench if not x.tool and
                                    (card.effect != 'eviolite' or x.card.stage == 0)), None)
+            elif card.effect == 'small_balloon':
+                if p.active and p.active.card.stage == 0 and not p.active.tool:
+                    target = p.active
+                else:
+                    target = next((x for x in p.bench if x.card.stage == 0 and not x.tool),None)
             elif card.effect == 'inflatable_boat':
                 if p.active and p.active.card.element == 'water' and not p.active.tool:
                     target = p.active
@@ -211,6 +222,13 @@ class TacticalAgent(RuleAgent):
                     battle.evolve(mon, evo)
                     break
 
+        if battle.finished:
+            battle.end_turn()
+            return
+        for card in list(p.hand):
+            if (card.effect == 'flame_patch' and not p.item_locked and p.active
+                    and p.active.card.element == 'fire' and p.energy_discard['fire'] > 0):
+                battle.play_trainer(card)
         for mon in list(p.all_in_play()):
             if mon.ability_used_turn == battle.turn:
                 continue
@@ -227,6 +245,9 @@ class TacticalAgent(RuleAgent):
             elif (mon.card.ability == 'ice_maker' and p.energy_types == ('water',)
                   and p.active and p.active.card.element == 'water'):
                 battle.use_ability(mon)
+            elif (mon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
+                  and mon.damage + 30 < mon.max_hp):
+                battle.use_ability(mon)
 
         # Draw support first if the hand is shallow; a preserved Cyrus can turn
         # an otherwise weak attack into an immediate KO after energy attachment.
@@ -236,7 +257,7 @@ class TacticalAgent(RuleAgent):
                 break
         for card in list(p.hand):
             if card.kind == 'pokemon' and card.stage == 0 and len(p.bench) < 3:
-                battle.bench_basic(card)
+                battle.bench_basic(card, trigger_bench_ability=(card.ability == 'legendary_drive' and sum(len(x.energy) for x in p.all_in_play()) >= 2))
         if not p.energy_used and not (battle.turn == 0 and battle.first == i):
             target = self.select_energy_target(p)
             if target is not None:
@@ -254,9 +275,31 @@ class TacticalAgent(RuleAgent):
                     battle.play_trainer(card, target=target)
                     break
         for card in list(p.hand):
+            if (card.effect == 'blues_provocation' and not p.supporter_used and foe.bench
+                and any(mon.card.name in ('Venusaur','Charizard','Blastoise','Pidgeot') for mon in p.all_in_play())):
+                target = min(foe.bench,key=lambda x:(x.max_hp-x.damage,x.card.points))
+                if p.active and any(battle.can_pay_energy(p.active,a) and
+                    self.attack_utility(p.active,target,p.bench,a) >
+                    self.attack_utility(p.active,foe.active,p.bench,a) + 15 for a in p.active.card.attacks):
+                    battle.play_trainer(card,target=target)
+                    break
+        for card in list(p.hand):
+            if card.effect == 'sabrina' and not p.supporter_used and foe.bench and foe.active:
+                if len(foe.active.energy)>=2 and max(len(x.energy) for x in foe.bench)<len(foe.active.energy):
+                    battle.play_trainer(card)
+                    break
+        for card in list(p.hand):
             if card.effect == 'serenas_choice' and not p.supporter_used and p.deck:
                 battle.play_trainer(card)
                 break
+        for card in list(p.hand):
+            if card.effect in ('lisia','clemont','may') and not p.supporter_used and p.deck:
+                match = {'lisia': lambda x: x.kind=='pokemon' and x.stage==0 and x.hp<=50,
+                         'clemont': lambda x: x.name in ('Magneton','Heliolisk',"Clemont's Backpack"),
+                         'may': lambda x: x.kind=='pokemon'}[card.effect]
+                if any(match(x) for x in p.deck):
+                    battle.play_trainer(card)
+                    break
         for card in list(p.hand):
             if card.effect == 'copycat' and not p.supporter_used and p.deck:
                 if len(foe.hand) >= len(p.hand) + 2:
