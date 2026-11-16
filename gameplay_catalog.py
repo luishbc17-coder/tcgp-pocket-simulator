@@ -81,7 +81,7 @@ def _text(s):
     """
     text = unicodedata.normalize('NFKC', str(s or '')).casefold()
     text = (text.replace('’', "'").replace('‘', "'")
-                .replace('—', '-').replace('–', '-')
+                .replace('—', '-').replace('–', '-').replace('−', '-')
                 .replace('pokémon', 'pokemon'))
     text = re.sub(r'\s+', ' ', text).strip()
     return text.rstrip(' .')

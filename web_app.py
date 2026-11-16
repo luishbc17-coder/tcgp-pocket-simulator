@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.3: audited new card effects + one-deck-versus-meta gauntlet."""
+"""TCG Pocket Lab v0.9.3.1: persistent tab navigation and meta diagnosis."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -103,7 +103,8 @@ st.markdown(hero(len(cards), total()), unsafe_allow_html=True)
 _notice = st.session_state.pop('_deck_transfer_notice', None)
 if _notice:
     st.success(f'Deck «{_notice}» carregado com sucesso. Abra a aba Meu deck para editar.')
-catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'])
+catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'],
+    key='main_active_tab_v0931', on_change='rerun')
 
 def reset_page():
     st.session_state.page = 1
@@ -288,6 +289,8 @@ with lab_tab:
         'Escolha seu oponente, confira os efeitos e investigue o comportamento da IA.',
         'BATTLE LAB'), unsafe_allow_html=True)
     st.caption('Os resultados são experimentais: a IA e o motor ainda não reproduzem todas as regras do jogo.')
+    if st.session_state.get('_deck_transfer_notice_meta'):
+        st.success(st.session_state.pop('_deck_transfer_notice_meta'))
     with st.expander(f'📚 Biblioteca de decks — {len(DECKS)} listas de 20 cartas', expanded=False):
         st.caption('Escolha uma lista pronta e importe para Meu deck. '
                    'Decks novos são liberados somente após a verificação completa de seus efeitos.')
@@ -303,6 +306,7 @@ with lab_tab:
                      use_container_width=True):
             try:
                 load_payload(my_preset)
+                st.session_state['_deck_transfer_notice_meta'] = 'Deck carregado. Continue na Arena ou abra Meu deck para editar.'
                 st.rerun()
             except (ValueError, KeyError, TypeError) as exc:
                 st.error(f'Não foi possível carregar este deck: {exc}')
@@ -361,6 +365,7 @@ with lab_tab:
         if st.button('🧩 Copiar este deck para Meu deck',use_container_width=True):
             try:
                 load_payload(opponent_payload)
+                st.session_state['_deck_transfer_notice_meta'] = 'Lista copiada. A aba Meta continuará aberta; selecione Meu deck quando quiser editar.'
                 st.rerun()
             except ValueError as exc:
                 st.error(f'Não foi possível copiar a lista: {exc}')
@@ -675,6 +680,16 @@ with lab_tab:
         'GAUNTLET · EXPERIMENTAL'), unsafe_allow_html=True)
     st.caption('As taxas exibidas refletem somente duelos técnicos executados com IA heurística. '
                'Adversários incompatíveis são identificados e excluídos dos percentuais.')
+    with st.expander('🔄 Catálogo de combate e diagnóstico', expanded=False):
+        st.caption('O catálogo de combate pode permanecer em cache. Se habilidades novas ' 
+                   'aparecerem como não reconhecidas, atualize a fonte antes de testar.')
+        if st.button('Atualizar dados de cartas e rever compatibilidade',
+                     key='refresh_gameplay_v0931', use_container_width=True):
+            fetch_gameplay_catalog.clear()
+            get_card_support_index.clear()
+            st.rerun()
+        st.caption('A exportação diagnóstica abaixo contém somente textos públicos ' 
+                   'de cartas dos decks cadastrados; não inclui dados pessoais.')
     chosen_gauntlet = st.multiselect('Decks do meta a enfrentar', options=list(DECKS),
         default=list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
         key='gauntlet_field_v093')
@@ -699,25 +714,27 @@ with lab_tab:
             gauntlet_plan = build_gauntlet_plan(
                 gauntlet_player, gauntlet_field, cards, gauntlet_data,
                 include_mirror=include_mirror)
-            leftc,midc,rightc = st.columns(3, gap='small')
-            leftc.metric('Compatíveis', gauntlet_plan['ready'])
-            midc.metric('Pendentes', gauntlet_plan['blocked'])
-            rightc.metric('Espelhados ignorados', gauntlet_plan['mirrors_skipped'])
-            st.dataframe([{
-                'Adversário': row['name'],
-                'Situação': {'ready':'✅ Simulável','blocked':'🛠️ Pendente',
-                             'mirror':'🔁 Espelhado'}.get(row['status'], row['status']),
-                'Cartas suportadas': f"{row['supported']}/{row['total']}",
-                'Motivo': '; '.join(row['reasons'][:2]) if row['status']=='blocked'
-                          else ('Confronto idêntico' if row['status']=='mirror' else 'Pronto para teste'),
-            } for row in gauntlet_plan['opponents']], use_container_width=True,
-                         hide_index=True)
+            from visual_theme import gauntlet_status_summary, gauntlet_cards
+            st.markdown(gauntlet_status_summary(gauntlet_plan), unsafe_allow_html=True)
+            st.markdown(gauntlet_cards(gauntlet_plan['opponents']),
+                        unsafe_allow_html=True)
             with st.expander('Detalhes das cartas e mecânicas pendentes'):
                 for row in gauntlet_plan['opponents']:
                     if row['reasons']:
                         st.markdown(f"**{row['name']}**")
                         for reason in row['reasons'][:6]:
                             st.write('• ' + reason)
+            from meta_diagnostics import blocked_catalog_diagnostics
+            debug_export = blocked_catalog_diagnostics(gauntlet_plan,
+                gauntlet_field, gauntlet_data)
+            if debug_export['blocked_cards']:
+                st.download_button('⬇ Baixar diagnóstico das cartas pendentes (JSON)',
+                    data=json.dumps(debug_export, ensure_ascii=False, indent=2),
+                    file_name='diagnostico_cartas_v0931.json', mime='application/json',
+                    key='download_catalog_diag_v0931', use_container_width=True)
+            if gauntlet_plan['ready'] == 0:
+                st.warning('Nenhum dos adversários selecionados é simulável com seu deck. '
+                           'Confira os motivos ou escolha outro confronto.')
             st.caption(f"Execução prevista: {gauntlet_plan['ready'] * int(gauntlet_games)} partidas "
                        f"auditadas em {gauntlet_plan['ready']} confronto(s).")
         except (requests.RequestException, ValueError, TypeError, KeyError, RuleError) as exc:
@@ -774,7 +791,7 @@ with lab_tab:
         st.info('A configuração mudou desde o último teste. Execute novamente para atualizar os resultados.')
 
 with motor_tab:
-    st.subheader('Motor de regras v0.9.3 — expansão incremental')
+    st.subheader('Motor de regras v0.9.3.1 — expansão incremental')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')

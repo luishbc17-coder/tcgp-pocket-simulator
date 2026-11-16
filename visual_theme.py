@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.3'
+VERSION = '0.9.3.1'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),
@@ -170,6 +170,27 @@ CSS = r"""
 .lab-library-summary strong {font-size:.82rem;color:var(--text-color);display:block;}
 .lab-library-summary span {font-size:.71rem;color:var(--text-color);opacity:.78;display:block;margin-top:5px;}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}
+
+/* Meta comparison cards avoid clipped horizontal tables on Android. */
+.lab-gauntlet-summary {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:14px 0;}
+.lab-gauntlet-stat {min-width:0;border:1px solid rgba(141,124,245,.23);border-radius:13px;
+ padding:12px 11px;background:rgba(141,124,245,.055);}
+.lab-gauntlet-stat b {display:block;font-size:1.35rem;line-height:1.2;color:var(--text-color);}
+.lab-gauntlet-stat span {display:block;margin-top:4px;color:var(--text-color);opacity:.72;font-size:.72rem;line-height:1.25;}
+.lab-gauntlet-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0 16px;}
+.lab-gauntlet-item {min-width:0;padding:14px;border:1px solid rgba(141,124,245,.22);border-radius:14px;
+ background:color-mix(in srgb, var(--secondary-background-color) 85%, var(--background-color));}
+.lab-gauntlet-name {font-size:.85rem;font-weight:750;color:var(--text-color);overflow-wrap:anywhere;line-height:1.3;}
+.lab-gauntlet-bottom {display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;align-items:center;margin-top:10px;}
+.lab-gauntlet-badge {font-size:.67rem;font-weight:700;border-radius:30px;padding:4px 8px;
+ border:1px solid rgba(138,148,179,.26);color:var(--text-color);}
+.lab-gauntlet-badge.ready {background:rgba(72,176,139,.11);border-color:rgba(72,176,139,.33);}
+.lab-gauntlet-badge.blocked {background:rgba(213,146,77,.10);border-color:rgba(213,146,77,.31);}
+.lab-gauntlet-progress {font-size:.72rem;opacity:.72;color:var(--text-color);}
+@media(max-width:700px){.lab-gauntlet-grid{grid-template-columns:1fr;}.lab-gauntlet-summary{gap:5px;}
+ .lab-gauntlet-stat{padding:10px 7px;}.lab-gauntlet-stat b{font-size:1.12rem;}
+ .lab-gauntlet-stat span{font-size:.63rem;}.lab-gauntlet-item{padding:12px;}}
+
 </style>
 """
 
@@ -305,3 +326,28 @@ def library_summary(name: str, energy_types: list[str], stage: str, count: int) 
              else 'Lista disponível; efeitos ainda não validados')
     return (f'<div class="lab-library-summary"><strong>{title}</strong>'
             f'<span>{safe(energy)} · {int(count)} cartas · {safe(phase)}</span></div>')
+
+
+def gauntlet_status_summary(plan: dict) -> str:
+    values = [('Compatíveis', plan['ready']), ('Pendentes', plan['blocked']),
+              ('Espelhados', plan['mirrors_skipped'])]
+    return '<div class="lab-gauntlet-summary">' + ''.join(
+        f'<div class="lab-gauntlet-stat"><b>{int(n)}</b><span>{safe(label)}</span></div>'
+        for label,n in values) + '</div>'
+
+
+def gauntlet_cards(opponents: list[dict]) -> str:
+    status = {'ready': ('Simulável','ready'), 'blocked': ('Pendente','blocked'),
+              'mirror': ('Espelhado','mirror')}
+    tiles = []
+    for row in opponents:
+        label, cls = status.get(row.get('status'), ('Indefinido','blocked'))
+        tiles.append(
+            '<div class="lab-gauntlet-item">'
+            f'<div class="lab-gauntlet-name">{safe(row.get("name", "Deck"))}</div>'
+            '<div class="lab-gauntlet-bottom">'
+            f'<span class="lab-gauntlet-badge {cls}">{label}</span>'
+            f'<span class="lab-gauntlet-progress">{int(row.get("supported",0))}/{int(row.get("total",0))} cartas</span>'
+            '</div></div>'
+        )
+    return '<div class="lab-gauntlet-grid">'+''.join(tiles)+'</div>'
