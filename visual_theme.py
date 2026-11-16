@@ -1,4 +1,4 @@
-"""Presentation-only helpers for TCG Pocket Lab v0.9.1.
+"""Presentation-only helpers for TCG Pocket Lab v0.9.2.
 
 Keep this module free from Streamlit and battle engine imports so user-facing
 markup is independently testable. Never trust deck/card display strings as HTML.
@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.1'
+VERSION = '0.9.2'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),
@@ -20,9 +20,9 @@ ENERGY_META = {
 
 CSS = r"""
 <style>
-/* V0.9.1 -- design changes are scoped: the native Streamlit controls remain accessible. */
+/* V0.9.2 -- design changes are scoped: the native Streamlit controls remain accessible. */
 :root { --lab-accent: #8d7cf5; --lab-cyan: #72d6d4; --lab-muted: #98a2bc; }
-.block-container { max-width: 1180px; padding-top: 1rem; padding-bottom: 4rem; }
+.block-container { max-width: 1180px; padding-top: 2.1rem; padding-bottom: 4rem; }
 [data-testid="stAppViewContainer"] {
   background-image: radial-gradient(circle at 12% -12%, rgba(120,99,236,.08), transparent 33%),
                     radial-gradient(circle at 92% 6%, rgba(88,197,197,.06), transparent 26%);
@@ -128,17 +128,26 @@ CSS = r"""
 [data-testid="stGrid"] [data-testid="stButton"] button {min-height:38px;padding:5px 7px;}
 [data-testid="stFileUploader"] {border-radius:13px;}
 @media(max-width:700px){
- .block-container {padding-top:.6rem;padding-left:.70rem;padding-right:.70rem;}
- .lab-hero {grid-template-columns:1fr;padding:20px 18px;border-radius:17px;gap:0;}
- .lab-hero h1 {font-size:1.78rem!important;margin:10px 0 9px;}
- .lab-hero p {font-size:.8rem;line-height:1.55;}
+ /* The Cloud header and mobile browser toolbar can otherwise mask the top row.
+    Keep a safe top gutter even when Streamlit changes its container class. */
+ [data-testid="stMainBlockContainer"], .block-container {
+   padding-top:max(2.6rem,calc(env(safe-area-inset-top,0px) + 1.3rem))!important;
+   padding-left:.78rem!important;padding-right:.78rem!important;
+ }
+ [data-testid="stMain"] {scroll-padding-top:2.7rem;}
+ html {scroll-padding-top:2.7rem;}
+ .lab-hero {grid-template-columns:1fr;padding:16px 18px;border-radius:17px;gap:0;margin-top:3px;}
+ .lab-eyebrow {font-size:9px;letter-spacing:.09em;}
+ .lab-hero-tags span:last-child {display:none;}
+ .lab-hero h1 {font-size:1.48rem!important;margin:8px 0 8px;}
+ .lab-hero p {font-size:.76rem;line-height:1.42;}
  .lab-card-art {display:none;}
- .lab-hero-tags {margin-top:15px;gap:5px;}
- .lab-hero-tags span {font-size:.66rem;padding:5px 8px;}
- .lab-stat-strip {gap:6px;margin-bottom:14px;}
- .lab-stat {padding:11px 8px;border-radius:12px;}
- .lab-stat b {font-size:1.03rem;}
- .lab-stat span {font-size:.64rem;}
+ .lab-hero-tags {margin-top:10px;gap:5px;}
+ .lab-hero-tags span {font-size:.62rem;padding:5px 7px;}
+ .lab-stat-strip {gap:6px;margin-bottom:12px;}
+ .lab-stat {padding:9px 8px;border-radius:12px;}
+ .lab-stat b {font-size:.95rem;}
+ .lab-stat span {font-size:.60rem;}
  .lab-deck-summary {padding:14px;border-radius:15px;}
  .lab-duel {gap:5px;}
  .lab-duel-side {padding:11px 9px;border-radius:12px;}
@@ -149,6 +158,17 @@ CSS = r"""
  .lab-card-meta span {font-size:.61rem;}
  [data-testid="stGrid"] [data-testid="stButton"] button {min-height:40px;}
 }
+/* The on-demand status badge is informational; actual action buttons remain native. */
+.lab-coverage-pill {display:inline-block;border-radius:100px;padding:5px 9px;margin:3px 0 8px;
+  font-size:.69rem;font-weight:750;border:1px solid rgba(141,124,245,.26);
+  background:rgba(141,124,245,.08);color:var(--text-color);}
+.lab-coverage-pill.supported {border-color:rgba(72,176,139,.38);background:rgba(72,176,139,.10);}
+.lab-coverage-pill.blocked {border-color:rgba(222,153,65,.36);background:rgba(222,153,65,.10);}
+.lab-coverage-pill.missing {border-color:rgba(187,87,87,.38);background:rgba(187,87,87,.09);}
+.lab-library-summary {border:1px solid rgba(141,124,245,.23);border-radius:15px;
+ padding:10px 13px;margin:7px 0 12px;background:rgba(141,124,245,.055);}
+.lab-library-summary strong {font-size:.82rem;color:var(--text-color);display:block;}
+.lab-library-summary span {font-size:.71rem;color:var(--text-color);opacity:.78;display:block;margin-top:5px;}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}
 </style>
 """
@@ -198,7 +218,7 @@ def hero(catalog_count: int, deck_count: int) -> str:
        <div class="lab-stat-strip" aria-label="Visão geral">
          <div class="lab-stat"><b>{catalog_label}</b><span>Cartas no catálogo</span></div>
          <div class="lab-stat"><b>{int(deck_count)} / 20</b><span>Seu deck</span></div>
-         <div class="lab-stat"><b>v0.9.1</b><span>Laboratório beta</span></div>
+         <div class="lab-stat"><b>v0.9.2</b><span>Laboratório beta</span></div>
        </div>'''
 
 
@@ -268,3 +288,20 @@ def result_bars(left_name: str, right_name: str, outcomes: dict, completed: int)
             f'<span>{n} partidas · {draw_label}</span></div>{rows}'
             '<div class="lab-results-note">Percentuais exclusivos deste motor experimental; '
             'não representam chances reais de vitória.</div></section>')
+
+
+def status_pill(status: str) -> str:
+    labels = {'supported': '✓ Efeito reconhecido', 'blocked': '◌ Efeito pendente',
+              'missing': '! Dados indisponíveis'}
+    state = status if status in labels else 'missing'
+    return (f'<span class="lab-coverage-pill {state}">'
+            f'{safe(labels[state])}</span>')
+
+
+def library_summary(name: str, energy_types: list[str], stage: str, count: int) -> str:
+    title = safe(name)
+    energy = ', '.join(ENERGY_META.get(e, ('', e))[1] for e in energy_types)
+    phase = ('Já testado tecnicamente (sem validação competitiva)' if stage == 'technical_tested'
+             else 'Lista disponível; efeitos ainda não validados')
+    return (f'<div class="lab-library-summary"><strong>{title}</strong>'
+            f'<span>{safe(energy)} · {int(count)} cartas · {safe(phase)}</span></div>')

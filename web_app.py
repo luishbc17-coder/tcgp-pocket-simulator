@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.1: mobile-first design refresh with unchanged tactical motor."""
+"""TCG Pocket Lab v0.9.2: mobile-first design refresh with unchanged tactical motor."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -11,14 +11,15 @@ from engine_diagnostics import run_smoke_checks
 from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_deck
 from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
+from card_support import build_support_index, coverage_summary
 from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from deck_identity import describe_selection, compare_decks
 from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
-                          deck_overview, matchup_preview, result_bars)
+                          deck_overview, matchup_preview, result_bars, status_pill, library_summary)
 
-META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
+META = [entry['name'] for entry in DECKS.values()]
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
 st.set_page_config(page_title='TCG Pocket Lab', page_icon='🃏', layout='wide')
 st.markdown(CSS, unsafe_allow_html=True)
@@ -54,6 +55,12 @@ def fetch_gameplay_catalog():
 def get_cards():
     return fetch_catalog()
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_card_support_index():
+    """Compile the optional catalog badge index only once per cache window."""
+    return build_support_index(get_cards(), fetch_gameplay_catalog())
+
 try:
     cards = get_cards()
 except Exception as exc:
@@ -76,7 +83,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.9.1','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.9.2','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     """Validate and stage import; apply it on the next Streamlit script run.
@@ -109,7 +116,7 @@ def next_page():
     st.session_state.page += 1
 
 
-def card_tile(card, location):
+def card_tile(card, location, support=None):
     """Create one compact card inside a Streamlit grid cell."""
     if card['image']:
         st.image(card['image'], use_container_width=True)
@@ -117,6 +124,8 @@ def card_tile(card, location):
         st.caption('🃏 Imagem indisponível')
     n = st.session_state.counts.get(card['id'], 0)
     st.markdown(card_caption(card, n), unsafe_allow_html=True)
+    if support:
+        st.markdown(status_pill(support['status']), unsafe_allow_html=True)
     # This inner row must also stay horizontal on mobile.
     minus, plus = st.columns(2, gap='xsmall', wrap=False)
     minus.button('−', key=f'{location}_minus_{card["id"]}',
@@ -135,6 +144,23 @@ with catalog_tab:
                   key='catalog_query', on_change=reset_page)
     st.radio('Tipo de carta', ['Todas', 'Pokémon', 'Treinadores'],
              horizontal=True, key='catalog_group_v091', on_change=reset_page)
+    st.checkbox('🔬 Mostrar quais cartas já são simuláveis',
+                key='show_support_v092', on_change=reset_page,
+                help='Consulta a base de jogabilidade somente quando ativado. '
+                     'Não garante fidelidade ao jogo oficial.')
+    support_index = None
+    if st.session_state.get('show_support_v092'):
+        try:
+            with st.spinner('Analisando compatibilidade das cartas...'):
+                support_index = get_card_support_index()
+            stats = coverage_summary({c['id']: 1 for c in cards}, support_index)
+            st.caption((f'Compatíveis com o motor: {stats["supported"]:,} de {stats["total"]:,} cartas. '
+                        'As demais permanecem no catálogo para montagem.').replace(',', '.'))
+            st.selectbox('Filtrar pelo suporte do motor',
+                         ['Todas', 'Com efeitos reconhecidos', 'Aguardando implementação'],
+                         key='catalog_support_filter_v092', on_change=reset_page)
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            st.warning(f'Não foi possível verificar os efeitos agora: {exc}')
     with st.expander('⚙️ Filtros avançados', expanded=False):
         sets = sorted({c['set'] for c in cards if c['set']})
         types = sorted({c['type'] for c in cards if c['type']})
@@ -155,8 +181,12 @@ with catalog_tab:
     chosen_type = st.session_state.get('chosen_type', 'Todas')
     card_group = st.session_state.get('catalog_group_v091', 'Todas')
     selected_ids = st.session_state.counts
+    support_filter = st.session_state.get('catalog_support_filter_v092', 'Todas')
     filtered = [c for c in cards
                 if query in c['name'].casefold()
+                and (support_index is None or support_filter == 'Todas'
+                     or (support_filter == 'Com efeitos reconhecidos' and support_index[c['id']]['status'] == 'supported')
+                     or (support_filter == 'Aguardando implementação' and support_index[c['id']]['status'] != 'supported'))
                 and (chosen_set == 'Todas' or c['set'] == chosen_set)
                 and (chosen_type == 'Todas' or c['type'] == chosen_type)
                 and (card_group == 'Todas'
@@ -189,7 +219,7 @@ with catalog_tab:
                           border=True, key='catalog_gallery')
         for card in visible:
             with gallery.cell():
-                card_tile(card, 'catalog')
+                card_tile(card, 'catalog', support_index[card['id']] if support_index else None)
         st.caption('Use os botões + e − em cada carta para ajustar as cópias do deck.')
         prev_bottom, page_bottom, next_bottom = st.columns([1, 1.15, 1],gap='xsmall',wrap=False)
         prev_bottom.button('◀ Voltar', key='catalog_prev_bottom',
@@ -232,7 +262,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.9.1)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.9.2)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -257,12 +287,24 @@ with lab_tab:
         'Escolha seu oponente, confira os efeitos e investigue o comportamento da IA.',
         'BATTLE LAB'), unsafe_allow_html=True)
     st.caption('Os resultados são experimentais: a IA e o motor ainda não reproduzem todas as regras do jogo.')
-    if st.button('🧩 Usar Mega Altaria / Greninja como Meu deck', key='load_altaria_v083', use_container_width=True):
-        try:
-            load_payload(get_preset('mega_altaria_greninja'))
-            st.rerun()
-        except (ValueError, KeyError) as exc:
-            st.error(f'Não foi possível carregar o preset: {exc}')
+    with st.expander(f'📚 Biblioteca de decks — {len(DECKS)} listas de 20 cartas', expanded=False):
+        st.caption('Escolha uma lista pronta e importe para Meu deck. '
+                   'As cinco listas novas ainda não estão liberadas para simulação automática.')
+        my_preset_slug = st.selectbox('Escolha o deck para importar', list(DECKS),
+                                     format_func=lambda slug: DECKS[slug]['name'],
+                                     key='preset_player_v092')
+        my_preset = get_preset(my_preset_slug)
+        st.markdown(library_summary(my_preset['name'], my_preset['energy_types'],
+                                    my_preset.get('release_stage','catalog_only'),
+                                    sum(my_preset['cards'].values())),
+                    unsafe_allow_html=True)
+        if st.button('🧩 Carregar lista no Meu deck', key='load_preset_v092',
+                     use_container_width=True):
+            try:
+                load_payload(my_preset)
+                st.rerun()
+            except (ValueError, KeyError, TypeError) as exc:
+                st.error(f'Não foi possível carregar este deck: {exc}')
     policy_label = st.selectbox(
         'Política da IA para este experimento',
         ['Tática v0.9 — considera evoluções e melhores trocas',
@@ -285,6 +327,18 @@ with lab_tab:
                                      format_func=lambda slug: DECKS[slug]['name'],
                                      key='preset_opponent')
         opponent_payload = get_preset(selected_slug)
+        st.markdown(library_summary(opponent_payload['name'], opponent_payload['energy_types'],
+                                    opponent_payload.get('release_stage','catalog_only'),
+                                    sum(opponent_payload['cards'].values())),
+                    unsafe_allow_html=True)
+        # Use a real source card image without generating or fabricating artwork.
+        featured_id = next((cid for cid in opponent_payload['cards']
+                            if cid in by_id and by_id[cid].get('image')
+                            and any(tag in by_id[cid]['name'].casefold()
+                                    for tag in ('mega', 'hoopa', 'suicune', 'miraidon', 'umbreon'))), None)
+        if featured_id:
+            st.image(by_id[featured_id]['image'], width=118,
+                     caption=by_id[featured_id]['name'])
         audit_preset = verify_presets(cards)[selected_slug]
         if audit_preset['ready_to_inspect']:
             st.caption('Lista de 20 cartas com IDs correspondentes ao catálogo carregado.')
@@ -294,10 +348,11 @@ with lab_tab:
         st.caption(opponent_payload['description'])
         st.markdown(f'[Consultar lista de origem]({opponent_payload["source"]}) '
                     f'· cartas verificadas até {opponent_payload["sample_through"]}.')
-        st.dataframe([{'Qtd.': n, 'Carta': by_id[cid]['name'] if cid in by_id else cid,
-                       'Expansão': cid.split('-')[0].upper(), 'ID': cid}
-                      for cid,n in opponent_payload['cards'].items()],
-                     use_container_width=True, hide_index=True)
+        with st.expander('🃏 Ver as 20 cartas desta lista', expanded=False):
+            st.dataframe([{'Qtd.': n, 'Carta': by_id[cid]['name'] if cid in by_id else cid,
+                           'Expansão': cid.split('-')[0].upper(), 'ID': cid}
+                          for cid,n in opponent_payload['cards'].items()],
+                         use_container_width=True, hide_index=True)
         st.download_button('⬇️ Baixar lista do adversário',
                            json.dumps(opponent_payload,ensure_ascii=False,indent=2),
                            file_name=f'{selected_slug}.json',mime='application/json',
@@ -614,9 +669,8 @@ with lab_tab:
 
     st.divider()
     st.subheader('Planejamento contra o meta')
-    st.caption('Mega Altaria/Greninja e Hoopa/Mega Absol possuem presets de 20 cartas. '
-               'Os outros arquétipos permanecem como planejamento, sem listas cadastradas. '
-               'Nenhum confronto possui autorização para simulação competitiva.')
+    st.caption('Sete listas de 20 cartas cadastradas; apenas os efeitos reconhecidos pelo motor '
+               'podem participar de duelos técnicos. Nenhum confronto está validado competitivamente.')
     opponents=st.multiselect('Adversários do meta',META,default=META)
     games=st.number_input('Partidas planejadas por confronto',min_value=1,
                            max_value=1_000_000,value=100_000,step=10_000)
@@ -631,7 +685,7 @@ with lab_tab:
                            file_name='experimento.json')
     st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.9 — fase de refinamento')
+    st.subheader('Motor de regras v0.9.2 — fase de expansão')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
