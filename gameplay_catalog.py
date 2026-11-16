@@ -103,6 +103,11 @@ def _recognize_attack(r: dict, raw_attack: dict):
     cost = parse_cost(raw_attack.get('cost'))
     if not effect:
         return Attack(name, cost, damage)
+    # Exact effect-text handlers; when the provider text changes, fail closed.
+    if effect == 'heal 30 damage from this pokémon':
+        return Attack(name, cost, damage, 'heal_self_30')
+    if effect == 'flip a coin. if heads, this attack does 30 more damage':
+        return Attack(name, cost, damage, 'coin_bonus_30')
     # Curated single effect, checked by name, base damage and the full known text.
     if (r['name'] == 'Mega Swampert ex' and name == 'Strong-Armed Destroyer'
         and damage == 150 and raw_attack.get('cost') == 'WWW'

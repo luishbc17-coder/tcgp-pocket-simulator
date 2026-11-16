@@ -1,15 +1,18 @@
-"""TCG Pocket Lab v0.6: verified source metadata and auditable battle kernel."""
+"""TCG Pocket Lab v0.7: two-deck compatibility and technical match replay."""
 import json
 from collections import defaultdict
 import streamlit as st
-from catalog_online import fetch_catalog, fetch_gameplay_catalog, validate_selection, URL
+import requests
+from catalog_online import fetch_catalog, validate_selection, URL
 from deckbuilder import make_experiment
 from layout_helpers import paginate, PAGE_SIZE
-from gameplay_catalog import GAMEPLAY_URL, audit_core_cards, audit_gameplay_records, compile_deck
+from gameplay_catalog import GAMEPLAY_URL, audit_core_cards, audit_gameplay_records, compile_deck, evolution_line_map
 from engine_diagnostics import run_smoke_checks
+from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_deck
+from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 
 META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
-ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal', 'dragon', 'colorless']
+ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
 st.set_page_config(page_title='TCG Pocket Lab', page_icon='🃏', layout='wide')
 st.markdown("""<style>
 /* Only small visual refinements; the responsive grid is native Streamlit. */
@@ -24,6 +27,27 @@ st.markdown("""<style>
 
 for key, default in {'counts':{},'deck_name':'Meu deck','energy':['water'],'saved_decks':{},'page':1}.items():
     if key not in st.session_state: st.session_state[key] = default
+# Migrate energy selections saved by older versions of the UI.
+if any(e not in ENERGIES for e in st.session_state.energy):
+    st.session_state.energy = [e for e in st.session_state.energy if e in ENERGIES] or ['water']
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_gameplay_catalog():
+    """Fetch gameplay data independently of the optional catalog adapter.
+
+    Compatibility with earlier catalog_online.py versions prevents a startup
+    ImportError if Streamlit Cloud refreshes files in different deployments.
+    """
+    response = requests.get(GAMEPLAY_URL, timeout=30,
+                            headers={'User-Agent': 'TCGPocketLab/0.7'})
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, dict):
+        data = data.get('cards', [])
+    if not isinstance(data, list) or len(data) < 100:
+        raise ValueError('Catálogo gameplay incompleto ou esquema alterado')
+    return data
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_cards():
@@ -51,7 +75,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.6','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.7','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     counts=data['cards']
@@ -69,7 +93,7 @@ def load_payload(data):
     st.session_state.deck_name=str(data.get('name','Meu deck'))[:100]
 
 st.title('🃏 TCG Pocket Lab')
-st.caption(f'v0.6 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
+st.caption(f'v0.7 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
 st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
 catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'])
 
@@ -168,7 +192,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.6)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.7)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -189,23 +213,128 @@ with deck_tab:
             del st.session_state.saved_decks[name]; st.rerun()
 
 with lab_tab:
-    st.subheader('Laboratório de confrontos')
-    st.info('O motor v0.6 já executa partidas técnicas com um conjunto limitado de ações. Os cinco decks do meta ainda exigem listas verificadas e implementação de habilidades/efeitos; por isso o confronto competitivo permanece bloqueado.')
-    opponents=st.multiselect('Adversários',META,default=META)
-    games=st.number_input('Partidas por confronto',min_value=1,max_value=1_000_000,value=100_000,step=10_000)
-    seed=st.number_input('Semente',min_value=0,value=20261116)
-    st.metric('Partidas planejadas',f'{len(opponents)*int(games):,}'.replace(',','.'))
+    st.subheader('Comparar dois decks')
+    st.caption('Monte seu deck na aba Meu deck. Depois carregue o adversário para diagnosticar cartas e efeitos necessários.')
+    opponent_mode = st.radio('Deck adversário',
+        ['Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
+        horizontal=False, key='opponent_mode')
+    opponent_payload = None
+    if opponent_mode == 'Importar JSON':
+        opponent_file = st.file_uploader('Deck adversário exportado do TCG Pocket Lab (.json)',
+                                         type=['json'], key='opponent_deck_json')
+        if opponent_file is not None:
+            if opponent_file.size > 100_000:
+                st.error('Arquivo muito grande para ser um deck de 20 cartas.')
+            else:
+                try:
+                    opponent_payload = parse_payload(json.loads(opponent_file.getvalue().decode('utf-8')))
+                except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                    st.error(f'Deck adversário inválido: {exc}')
+    elif opponent_mode == 'Deck salvo na sessão':
+        names = list(st.session_state.saved_decks)
+        if names:
+            selected_name = st.selectbox('Escolher deck adversário',names)
+            try:
+                opponent_payload = parse_payload(st.session_state.saved_decks[selected_name])
+            except ValueError as exc:
+                st.error(f'Deck salvo inválido: {exc}')
+        else:
+            st.info('Nenhum deck foi salvo nesta sessão. Salve um na aba Meu deck ou importe JSON.')
+    else:
+        opponent_payload = parse_payload(payload())
+        st.caption('Usa sua própria lista como adversária para depuração, não como previsão do metagame.')
+
+    if opponent_payload is not None:
+        try:
+            with st.spinner('Verificando as cartas no catálogo de batalha...'):
+                game_cards = fetch_gameplay_catalog()
+            match_report = inspect_matchup(payload(),opponent_payload,cards,game_cards)
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            st.error(f'Não foi possível conferir os dois decks: {exc}')
+        else:
+            left_r = match_report['player']
+            right_r = match_report['opponent']
+            c1,c2 = st.columns(2, gap='small')
+            c1.metric('Meu deck — efeitos suportados',f'{left_r["supported"]}/{left_r["total"]}')
+            c2.metric('Adversário — efeitos suportados',f'{right_r["supported"]}/{right_r["total"]}')
+            for label, report in [('Meu deck',left_r),('Adversário',right_r)]:
+                with st.expander(f'🔎 {label} — {report["unsupported"]} carta(s) sem suporte',
+                                 expanded=report['unsupported']>0 or bool(report['issues'])):
+                    st.caption(f'Energia: {", ".join(report["energy_types"])}; '
+                               f'{report["total"]} cartas na lista.')
+                    for issue in report['issues']:
+                        st.warning(issue)
+                    if report['cards']:
+                        st.dataframe([{'Qtd.':x['quantity'],'Carta':x['name'],
+                                       'Situação':x['status'], 'Motivo':x['reason']}
+                                      for x in report['cards']],
+                                     use_container_width=True, hide_index=True)
+                    else:
+                        st.info('Adicione cartas na aba Meu deck.')
+            st.download_button('⬇️ Exportar relatório de compatibilidade',
+                               data=json.dumps(match_report,ensure_ascii=False,indent=2),
+                               file_name='compatibilidade_decks_v07.json',
+                               mime='application/json', use_container_width=True)
+            st.divider()
+            st.subheader('Duelo técnico — 1 partida')
+            st.caption('Execução apenas para depuração. A IA é básica, certas regras ainda '
+                       'não estão modeladas e resultados não representam win rates reais.')
+            if match_report['technical_demo_ready']:
+                technical_seed = st.number_input('Semente do duelo',min_value=0,
+                                                  value=20261116,key='technical_seed')
+                if st.button('▶ Executar uma partida de depuração',use_container_width=True):
+                    try:
+                        demo=play_fixture_match(
+                            load_compiled_deck(payload(),game_cards),
+                            load_compiled_deck(opponent_payload,game_cards),
+                            seed=int(technical_seed),
+                            energy_left=tuple(payload()['energy_types']),
+                            energy_right=tuple(opponent_payload['energy_types']),
+                            line_map=evolution_line_map(game_cards))
+                        st.session_state['debug_trace']={
+                            'seed':int(technical_seed), 'turns':demo.turn,
+                            'winner':demo.winner,
+                            'events':demo.log,
+                            'left':payload(),'right':opponent_payload}
+                    except (RuleError, UnsupportedEffect, ValueError, IndexError) as exc:
+                        st.error(f'Partida técnica interrompida: {exc}')
+                trace=st.session_state.get('debug_trace')
+                if trace and trace['left']==payload() and trace['right']==opponent_payload:
+                    st.info(f'Depuração concluída: {trace["turns"]} meios-turnos; '
+                            'veja o histórico abaixo. O resultado não estima competitividade.')
+                    with st.expander('Histórico da partida',expanded=True):
+                        st.code('\n'.join(trace['events'][-250:]),language=None)
+                    st.download_button('⬇️ Baixar replay JSON',
+                                       json.dumps(trace,ensure_ascii=False,indent=2),
+                                       file_name='duelo_debug.json',mime='application/json')
+            else:
+                st.warning('Duelo técnico bloqueado: corrija os problemas listados nos dois decks.')
+    else:
+        st.info('Importe ou selecione um deck adversário para iniciar o diagnóstico.')
+
+    st.divider()
+    st.subheader('Planejamento contra o meta')
+    st.caption('Os arquétipos abaixo ainda não têm listas de 20 cartas verificadas '
+               'nesta versão. Selecioná-los prepara um plano, não partidas.')
+    opponents=st.multiselect('Adversários do meta',META,default=META)
+    games=st.number_input('Partidas planejadas por confronto',min_value=1,
+                           max_value=1_000_000,value=100_000,step=10_000)
+    seed=st.number_input('Semente do planejamento',min_value=0,value=20261116)
+    st.metric('Partidas planejadas (não executadas)',
+              f'{len(opponents)*int(games):,}'.replace(',','.'))
     if opponents:
         plan=make_experiment('meu_deck.json',opponents,int(games),int(seed))
         plan['player_deck']=payload()
-        st.download_button('⬇️ Exportar plano',json.dumps(plan,ensure_ascii=False,indent=2),file_name='experimento.json')
-    st.button('▶️ Simular partidas',disabled=True)
+        st.download_button('⬇️ Exportar plano',
+                           json.dumps(plan,ensure_ascii=False,indent=2),
+                           file_name='experimento.json')
+    st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.6')
+    st.subheader('Motor de regras v0.7')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA básica e replay por semente.')
-    st.markdown('**Efeitos adicionais codificados:** Pesquisa de Professores, Poké Bola e o descarte aleatório do ataque de Mega Swampert ex. Cada efeito só é ativado se o texto da carta corresponder à regra implementada.')
-    st.warning('Ainda não modelados: habilidades, condições especiais, ferramentas, estádios, zona de energia multicolorida, modificadores complexos, decisões ótimas e resoluções simultâneas. Nem todos os efeitos especiais estão validados para partidas oficiais.')
+    st.markdown('**Efeitos adicionais codificados:** Pesquisa de Professores, Poké Bola, descarte aleatório do Mega Swampert ex, cura própria de 30 pontos e bônus de 30 por moeda, reconhecidos apenas pelo texto exato.')
+    st.warning('Ainda não modelados: habilidades, condições especiais, ferramentas, estádios, zona de energia multicolorida, modificadores complexos, decisões ótimas e resoluções simultâneas. A partida de depuração não reproduz necessariamente todas as regras oficiais.')
     st.divider()
     st.subheader('Auditoria do catálogo')
     audit=audit_core_cards(cards)

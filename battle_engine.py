@@ -1,4 +1,4 @@
-"""TCG Pocket rules kernel, v0.6.
+"""TCG Pocket rules kernel, v0.7.
 
 Only effects explicitly identified in cards are executable. Unsupported text MUST
 prevent a real matchup from being run; tests may use synthetic fixtures.
@@ -272,18 +272,33 @@ class Battle:
             raise RuleError('Illegal attack')
         if not self.can_pay_energy(me.active, selected):
             raise RuleError('Attack energy cost unpaid')
-        if selected.effect not in ('', 'discard_2_global_random'):
+        if selected.effect not in ('', 'discard_2_global_random', 'heal_self_30', 'coin_bonus_30'):
             raise UnsupportedEffect('Attack effect requires handler')
-        damage = selected.damage + (20 if them.active.card.weakness == me.active.card.element else 0)
+        damage = selected.damage
+        if selected.effect == 'coin_bonus_30':
+            heads = self.rng.choice((True, False))
+            self.log.append(f'P{i} coin flip: {"heads" if heads else "tails"}')
+            if heads:
+                damage += 30
+        if damage > 0 and them.active.card.weakness == me.active.card.element:
+            damage += 20
         them.active.damage += damage
         self.log.append(f'P{i} {selected.name}, {damage} damage')
+        if selected.effect == 'heal_self_30':
+            old_damage = me.active.damage
+            me.active.damage = max(0, me.active.damage - 30)
+            self.log.append(f'P{i} {me.active.card.name} heals {old_damage - me.active.damage}')
         if selected.effect == 'discard_2_global_random':
             # Both sides' remaining Pokémon supply the shared random Energy pool.
-            pool = [p for owner in self.players for pokemon in owner.all_in_play()
-                    for p in [pokemon] for _ in pokemon.energy]
-            for _ in range(min(2, len(pool))):
-                idx = self.rng.randrange(len(pool))
-                pokemon = pool.pop(idx)
+            for _ in range(2):
+                # Rebuild after each removal: every remaining Energy token has
+                # equal weight, and zero-energy Pokemon can never be selected.
+                pool = [pokemon for owner in self.players
+                        for pokemon in owner.all_in_play()
+                        for _ in pokemon.energy]
+                if not pool:
+                    break
+                pokemon = self.rng.choice(pool)
                 pokemon.energy.pop(self.rng.randrange(len(pokemon.energy)))
                 self.log.append(f'{pokemon.card.name} discards 1 random Energy')
         if them.active and them.active.damage >= them.active.card.hp:
@@ -372,7 +387,7 @@ class RuleAgent:
         if p.active:
             options = [a for a in p.active.card.attacks if battle.can_pay_energy(p.active,a)]
             if options:
-                battle.attack(max(options,key=lambda a:a.damage))
+                battle.attack(max(options,key=lambda a:a.damage + (15 if a.effect=='coin_bonus_30' else 0)))
                 return
         battle.end_turn()
 
