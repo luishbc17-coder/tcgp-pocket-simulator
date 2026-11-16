@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.0: tactical vs baseline AI, explainable telemetry, and refreshed interface."""
+"""TCG Pocket Lab v0.9.1: mobile-first design refresh with unchanged tactical motor."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -15,41 +15,13 @@ from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from deck_identity import describe_selection, compare_decks
+from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
+                          deck_overview, matchup_preview, result_bars)
 
 META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
 st.set_page_config(page_title='TCG Pocket Lab', page_icon='🃏', layout='wide')
-st.markdown("""<style>
-/* v0.9: restrained design system, responsive, legible in dark and light themes. */
-.block-container {max-width: 1050px; padding-top: 1rem; padding-bottom: 3rem}
-@media (max-width: 700px) {
-    .block-container {padding-left: .6rem; padding-right: .6rem}
-    h1 {font-size: 1.6rem !important}
-    [data-testid="stGrid"] [data-testid="stButton"] button {min-height: 2.5rem; padding: .15rem .25rem}
-    [data-testid="stGrid"] [data-testid="stImage"] img {border-radius: 5px}
-}
-/* App chrome and focus treatment, without breaking native keyboard controls. */
-:root { --lab-purple: #a497ff; --lab-blue: #61cdf2; }
-.lab-hero {
-  border-radius: 20px; border: 1px solid rgba(164,151,255,.35);
-  background: radial-gradient(circle at 87% 14%, rgba(97,205,242,.19), transparent 33%),
-              linear-gradient(135deg, #172039 0%, #20234c 55%, #171c2e 100%);
-  padding: clamp(19px, 3vw, 32px); color: #f8fafc;
-  box-shadow: 0 12px 35px rgba(14,20,44,.13); margin-bottom: .9rem;
-}
-.lab-kicker {font-size:.7rem; font-weight:750; letter-spacing:.16em; color:#b8c8ff; margin-bottom:.55rem}
-.lab-hero-title {font-size:clamp(1.65rem, 3.4vw, 2.35rem);font-weight:800;line-height:1.1;margin:0 0 .55rem}
-.lab-hero-sub {max-width:620px;color:#d7dff3;font-size:.89rem;line-height:1.55}
-.lab-hero-meta {display:flex; flex-wrap:wrap;gap:9px;margin-top:17px}
-.lab-pill {border:1px solid rgba(207,216,249,.27);border-radius:30px;padding:6px 11px;
-  font-size:.74rem;color:#e6ecfa;background:rgba(238,245,255,.05)}
-.lab-section-intro {border-left:3px solid #9b8aff;padding:.4rem 0 .4rem 1rem;margin:.9rem 0 1rem}
-.lab-section-intro strong {font-size:1.01rem}
-.lab-section-intro span {display:block;opacity:.77;font-size:.85rem;margin-top:.2rem}
-.stButton button[kind="primary"] {border-radius:12px}
-[data-testid="stMetric"] {border:1px solid rgba(130,140,170,.18);padding:.65rem .8rem;border-radius:14px}
-@media (max-width:700px){ .lab-hero{border-radius:14px;margin:.05rem 0 .8rem} .lab-pill{font-size:.68rem} }
-</style>""", unsafe_allow_html=True)
+st.markdown(CSS, unsafe_allow_html=True)
 
 for key, default in {'counts':{},'deck_name':'Meu deck','energy':['water'],'saved_decks':{},'page':1}.items():
     if key not in st.session_state: st.session_state[key] = default
@@ -104,7 +76,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.9.0','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.9.1','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     """Validate and stage import; apply it on the next Streamlit script run.
@@ -119,16 +91,7 @@ def load_payload(data):
 # It works for Copy preset, Import JSON, and Open saved deck alike.
 apply_pending_transfer(st.session_state)
 
-st.markdown("""<div class="lab-hero" role="banner">
-<div class="lab-kicker">TCG POCKET LAB <span style="opacity:.6">/ V0.9.0</span></div>
-<div class="lab-hero-title">Monte. Teste. Entenda seu deck.</div>
-<div class="lab-hero-sub">Catálogo de cartas, construção de decks e um laboratório de partidas auditadas.
-A partir desta versão, compare uma IA clássica com uma política tática experimental.</div>
-<div class="lab-hero-meta"><span class="lab-pill">✦ IA tática v0.9</span>
-<span class="lab-pill">▣ Replays auditados</span><span class="lab-pill">◈ Beta técnico</span></div>
-</div>""", unsafe_allow_html=True)
-st.caption(f'{len(cards):,} cartas no catálogo comunitário · protótipo não validado competitivamente'.replace(',', '.'))
-st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
+st.markdown(hero(len(cards), total()), unsafe_allow_html=True)
 _notice = st.session_state.pop('_deck_transfer_notice', None)
 if _notice:
     st.success(f'Deck «{_notice}» carregado com sucesso. Abra a aba Meu deck para editar.')
@@ -152,9 +115,8 @@ def card_tile(card, location):
         st.image(card['image'], use_container_width=True)
     else:
         st.caption('🃏 Imagem indisponível')
-    st.markdown(f"**{card['name']}**")
-    st.caption(f"{card['set']} · #{card['number']}")
     n = st.session_state.counts.get(card['id'], 0)
+    st.markdown(card_caption(card, n), unsafe_allow_html=True)
     # This inner row must also stay horizontal on mobile.
     minus, plus = st.columns(2, gap='xsmall', wrap=False)
     minus.button('−', key=f'{location}_minus_{card["id"]}',
@@ -166,9 +128,14 @@ def card_tile(card, location):
 
 
 with catalog_tab:
-    st.text_input('Buscar carta', placeholder='Nome do Pokémon ou treinador',
+    st.markdown(section('Explore as cartas',
+        'Busque por nome, filtre por expansão e adicione cartas ao seu deck.',
+        'COLEÇÃO'), unsafe_allow_html=True)
+    st.text_input('Buscar carta', placeholder='Pesquise um Pokémon ou treinador…',
                   key='catalog_query', on_change=reset_page)
-    with st.expander('⚙️ Filtrar por expansão e categoria', expanded=False):
+    st.radio('Tipo de carta', ['Todas', 'Pokémon', 'Treinadores'],
+             horizontal=True, key='catalog_group_v091', on_change=reset_page)
+    with st.expander('⚙️ Filtros avançados', expanded=False):
         sets = sorted({c['set'] for c in cards if c['set']})
         types = sorted({c['type'] for c in cards if c['type']})
         c1, c2 = st.columns(2)
@@ -178,58 +145,94 @@ with catalog_tab:
         with c2:
             st.selectbox('Categoria', ['Todas'] + types, key='chosen_type',
                          on_change=reset_page)
+        st.selectbox('Ordenação', ['Nome (A–Z)', 'Expansão', 'No meu deck primeiro'],
+                     key='catalog_sort_v091', on_change=reset_page)
+        st.checkbox('Mostrar somente cartas do meu deck',
+                    key='only_my_cards_v091', on_change=reset_page)
 
     query = st.session_state.get('catalog_query', '').strip().casefold()
     chosen_set = st.session_state.get('chosen_set', 'Todas')
     chosen_type = st.session_state.get('chosen_type', 'Todas')
+    card_group = st.session_state.get('catalog_group_v091', 'Todas')
+    selected_ids = st.session_state.counts
     filtered = [c for c in cards
                 if query in c['name'].casefold()
                 and (chosen_set == 'Todas' or c['set'] == chosen_set)
-                and (chosen_type == 'Todas' or c['type'] == chosen_type)]
+                and (chosen_type == 'Todas' or c['type'] == chosen_type)
+                and (card_group == 'Todas'
+                     or (card_group == 'Pokémon' and is_pokemon(c))
+                     or (card_group == 'Treinadores' and not is_pokemon(c)))
+                and (not st.session_state.get('only_my_cards_v091', False)
+                     or selected_ids.get(c['id'], 0) > 0)]
+    ordering = st.session_state.get('catalog_sort_v091', 'Nome (A–Z)')
+    if ordering == 'No meu deck primeiro':
+        filtered.sort(key=lambda c: (-selected_ids.get(c['id'], 0), c['name'].casefold(), c['id']))
+    elif ordering == 'Expansão':
+        filtered.sort(key=lambda c: (c['set'].casefold(), c['number'], c['name'].casefold()))
+    else:
+        filtered.sort(key=lambda c: (c['name'].casefold(), c['set'], c['id']))
     visible, page, pages = paginate(filtered, st.session_state.page, PAGE_SIZE)
     st.session_state.page = page
-    st.caption(f'{len(filtered)} resultados · {PAGE_SIZE} por página')
-    back, current, forward = st.columns([1, 1.3, 1], gap='xsmall', wrap=False)
-    back.button('◀ Anterior', on_click=previous_page, disabled=page <= 1,
-                use_container_width=True)
-    current.markdown(f'<div style="text-align:center;padding:.45rem 0">{page} / {pages}</div>',
-                     unsafe_allow_html=True)
-    forward.button('Próxima ▶', on_click=next_page, disabled=page >= pages,
-                   use_container_width=True)
-
+    st.caption(f'{len(filtered):,} cartas encontradas · página {page} de {pages}'.replace(',', '.'))
+    back, current, forward = st.columns([1, 1.15, 1], gap='xsmall', wrap=False)
+    back.button('◀ Voltar', key='catalog_prev_top', on_click=previous_page,
+                disabled=page <= 1, use_container_width=True)
+    current.markdown(f'<div style="text-align:center;padding:.55rem 0;font-size:.80rem">'
+                     f'{page} / {pages}</div>', unsafe_allow_html=True)
+    forward.button('Próxima ▶', key='catalog_next_top', on_click=next_page,
+                   disabled=page >= pages, use_container_width=True)
     if not visible:
-        st.info('Nenhuma carta encontrada para esses filtros.')
+        st.info('Nenhuma carta encontrada. Experimente alterar os filtros.')
     else:
-        # Streamlit >=1.67: up to 4 columns on desktop; 2 on typical phones.
-        # The native grid reflows, unlike st.columns() with its default wrap.
-        gallery = st.grid(4, min_column_width=150, gap='xsmall',
+        # Native wrapping: typically two cards per row on Android, four on desktop.
+        gallery = st.grid(4, min_column_width=146, gap='small',
                           border=True, key='catalog_gallery')
         for card in visible:
             with gallery.cell():
                 card_tile(card, 'catalog')
+        st.caption('Use os botões + e − em cada carta para ajustar as cópias do deck.')
+        prev_bottom, page_bottom, next_bottom = st.columns([1, 1.15, 1],gap='xsmall',wrap=False)
+        prev_bottom.button('◀ Voltar', key='catalog_prev_bottom',
+                           on_click=previous_page, disabled=page <= 1,
+                           use_container_width=True)
+        page_bottom.markdown(f'<div style="text-align:center;padding:.55rem 0;font-size:.80rem">'
+                             f'{page} / {pages}</div>', unsafe_allow_html=True)
+        next_bottom.button('Próxima ▶', key='catalog_next_bottom',
+                           on_click=next_page, disabled=page >= pages,
+                           use_container_width=True)
 
 with deck_tab:
+    st.markdown(section('Construa seu deck',
+        'Monte uma lista de 20 cartas e escolha a energia para testar na arena.',
+        'DECK BUILDER'), unsafe_allow_html=True)
     st.text_input('Nome do deck', key='deck_name')
     st.multiselect('Energias (até 3)', ENERGIES, key='energy', max_selections=3)
+    st.markdown(deck_overview(st.session_state.counts, by_id, st.session_state.energy),
+                unsafe_allow_html=True)
     selected = list(st.session_state.counts.items())
     if not selected:
-        st.info('Seu deck está vazio. Vá à aba Cartas para adicionar Pokémon e treinadores.')
+        st.info('Seu deck está vazio. Comece na aba Cartas: escolha um Pokémon e toque em +.')
     else:
-        gallery = st.grid(4, min_column_width=150, gap='xsmall',
-                          border=True, key='my_deck_gallery')
-        for cid, n in selected:
-            c = by_id.get(cid)
-            with gallery.cell():
-                if c:
-                    card_tile(c, 'deck')
-                else:
-                    st.warning(f'Carta ausente: {cid}')
+        selected_cards = [(cid, n, by_id.get(cid)) for cid,n in selected]
+        for title, group in [('Pokémon', [(cid,n,c) for cid,n,c in selected_cards if c and is_pokemon(c)]),
+                             ('Treinadores', [(cid,n,c) for cid,n,c in selected_cards if c and not is_pokemon(c)])]:
+            if group:
+                st.markdown(section(title, f'{sum(n for _, n, _ in group)} cartas selecionadas',
+                                    'COMPOSIÇÃO'), unsafe_allow_html=True)
+                gallery = st.grid(4, min_column_width=146, gap='small',
+                                  border=True, key=f'my_deck_{title.lower()}_gallery_v091')
+                for cid,n,c in group:
+                    with gallery.cell():
+                        card_tile(c, 'deck')
+        missing = [cid for cid,n,c in selected_cards if c is None]
+        for cid in missing:
+            st.warning(f'Carta ausente no catálogo: {cid}')
     issues=validate_selection(st.session_state.counts,cards)
     if not st.session_state.energy: issues.append('Selecione ao menos um tipo de energia.')
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.9.0)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.9.1)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -250,7 +253,9 @@ with deck_tab:
             del st.session_state.saved_decks[name]; st.rerun()
 
 with lab_tab:
-    st.markdown('<div class="lab-section-intro"><strong>⚔️ Arena de confrontos</strong><span>Selecione seus decks, confira os efeitos e teste estratégias.</span></div>', unsafe_allow_html=True)
+    st.markdown(section('Arena de confrontos',
+        'Escolha seu oponente, confira os efeitos e investigue o comportamento da IA.',
+        'BATTLE LAB'), unsafe_allow_html=True)
     st.caption('Os resultados são experimentais: a IA e o motor ainda não reproduzem todas as regras do jogo.')
     if st.button('🧩 Usar Mega Altaria / Greninja como Meu deck', key='load_altaria_v083', use_container_width=True):
         try:
@@ -341,13 +346,9 @@ with lab_tab:
             preview_left = describe_selection(payload(), 'Meu deck')
             preview_right = describe_selection(opponent_payload, 'Adversário')
             preview_comparison = compare_decks(preview_left, preview_right)
-            st.markdown('**Confronto selecionado:** ' +
-                        f'**{preview_left["recognized_name"] or preview_left["name"]}** '
-                        f'({", ".join(preview_left["energy_types"])}) × '
-                        f'**{preview_right["recognized_name"] or preview_right["name"]}** '
-                        f'({", ".join(preview_right["energy_types"])})')
-            st.caption(f'Identidade das listas (IDs, cópias e energia): '
-                       f'{preview_left["signature"][:12]} × {preview_right["signature"][:12]}')
+            st.markdown(matchup_preview(preview_left, preview_right),
+                        unsafe_allow_html=True)
+            st.caption('Os identificadores resumidos distinguem as composições reais dos decks.')
             if preview_comparison['warning']:
                 st.warning(preview_comparison['warning'])
             c1,c2 = st.columns(2, gap='small')
@@ -425,7 +426,7 @@ with lab_tab:
                                        json.dumps(trace,ensure_ascii=False,indent=2),
                                        file_name='duelo_debug.json',mime='application/json')
                 st.divider()
-                st.subheader('🧪 Laboratório de simulações · v0.9')
+                st.subheader('🧪 Lotes auditados · v0.9')
                 st.warning('Estes resultados medem o comportamento de uma IA experimental num '
                            'motor ainda incompleto. NÃO são probabilidades confiáveis de vitória no meta.')
                 st.caption('A cada quatro partidas o teste alterna a posição dos decks e quem começa. '
@@ -496,12 +497,11 @@ with lab_tab:
                                f'Média: {result["average_half_turns"]} meios-turnos · '
                                f'Primeira semente: {result["seed"]}'.replace(',', '.'))
                     if result['completed']:
-                        st.markdown('#### Saídas do simulador')
-                        m_left, m_right, m_draw = st.columns(3)
-                        m_left.metric('Meu deck', f'{100*result["outcomes"]["left"]/result["completed"]:.1f}%')
-                        m_right.metric('Adversário', f'{100*result["outcomes"]["right"]/result["completed"]:.1f}%')
-                        m_draw.metric('Empates', result['outcomes']['draw'])
-                        st.caption('Percentuais apenas das partidas do motor experimental; NÃO são probabilidades reais.')
+                        st.markdown(result_bars(
+                            report_left['recognized_name'] or report_left['name'],
+                            report_right['recognized_name'] or report_right['name'],
+                            result['outcomes'], result['completed']),
+                            unsafe_allow_html=True)
                     telemetry = result.get('telemetry', {})
                     if telemetry:
                         with st.expander('📊 Decisões e uso de cartas por deck', expanded=True):
@@ -596,6 +596,12 @@ with lab_tab:
                                        'Recuos': sum(item['telemetry'][z]['counts'].get('retreats',0) for z in ('left','right'))}
                                       for key,item in comparison['policies'].items()],
                                      use_container_width=True,hide_index=True)
+                        for policy_code, policy_data in comparison['policies'].items():
+                            st.markdown(result_bars(
+                                ('Clássica' if policy_code == 'baseline' else 'Tática') + ' · Meu deck',
+                                ('Clássica' if policy_code == 'baseline' else 'Tática') + ' · Adversário',
+                                policy_data['outcomes'], policy_data['completed']),
+                                unsafe_allow_html=True)
                         st.download_button('⬇ Exportar comparação A/B (JSON)',
                             json.dumps(comparison,ensure_ascii=False,indent=2),
                             file_name='comparacao_politicas_v09.json',mime='application/json',
@@ -625,7 +631,7 @@ with lab_tab:
                            file_name='experimento.json')
     st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.9.0 — fase de refinamento')
+    st.subheader('Motor de regras v0.9 — fase de refinamento')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')

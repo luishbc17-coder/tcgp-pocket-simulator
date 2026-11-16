@@ -1,0 +1,270 @@
+"""Presentation-only helpers for TCG Pocket Lab v0.9.1.
+
+Keep this module free from Streamlit and battle engine imports so user-facing
+markup is independently testable. Never trust deck/card display strings as HTML.
+"""
+from __future__ import annotations
+from html import escape
+
+VERSION = '0.9.1'
+ENERGY_META = {
+    'water': ('💧', 'Água'),
+    'fire': ('🔥', 'Fogo'),
+    'grass': ('🌿', 'Planta'),
+    'lightning': ('⚡', 'Elétrico'),
+    'psychic': ('🔮', 'Psíquico'),
+    'fighting': ('🥊', 'Lutador'),
+    'darkness': ('🌙', 'Sombrio'),
+    'metal': ('⚙️', 'Metal'),
+}
+
+CSS = r"""
+<style>
+/* V0.9.1 -- design changes are scoped: the native Streamlit controls remain accessible. */
+:root { --lab-accent: #8d7cf5; --lab-cyan: #72d6d4; --lab-muted: #98a2bc; }
+.block-container { max-width: 1180px; padding-top: 1rem; padding-bottom: 4rem; }
+[data-testid="stAppViewContainer"] {
+  background-image: radial-gradient(circle at 12% -12%, rgba(120,99,236,.08), transparent 33%),
+                    radial-gradient(circle at 92% 6%, rgba(88,197,197,.06), transparent 26%);
+}
+/* The hero uses its own dark palette and remains legible in both Streamlit themes. */
+.lab-hero {
+  position:relative; overflow:hidden; isolation:isolate; display:grid;
+  grid-template-columns:minmax(0, 1fr) 190px; gap:20px; align-items:center;
+  background:radial-gradient(circle at 72% 10%, rgba(100,218,222,.22), transparent 43%),
+             linear-gradient(130deg, #13172c 0%, #212b56 52%, #29204f 100%);
+  border:1px solid rgba(167,165,241,.30); border-radius:24px;
+  padding:clamp(20px, 3vw, 34px); color:#f9fbff; margin-bottom:15px;
+  box-shadow:0 16px 38px rgba(31,31,70,.14);
+}
+.lab-hero:before { content:""; position:absolute; z-index:-1; width:260px; height:260px;
+  border:1px solid rgba(221,230,255,.11);border-radius:100%;right:-70px;top:-140px; }
+.lab-eyebrow { display:flex; align-items:center; gap:9px; color:#c0c9ef;
+  font-size:11px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+.lab-live-dot {width:7px;height:7px;display:inline-block;border-radius:50%;background:#72d6d4;
+  box-shadow:0 0 0 4px rgba(114,214,212,.13);}
+.lab-hero h1 {margin:.9rem 0 .75rem;font-size:clamp(1.7rem, 3.9vw, 2.9rem)!important;
+  font-weight:800;line-height:1.11;letter-spacing:-.04em;color:#fff;}
+.lab-hero h1 span {color:#a99bff;}
+.lab-hero p {max-width:620px;font-size:.91rem;line-height:1.58;margin:0;color:#d5ddf0;}
+.lab-hero-tags {display:flex;gap:8px;flex-wrap:wrap;margin-top:18px;}
+.lab-hero-tags span {font-size:.72rem; font-weight:650; color:#e6eaf9;
+  border:1px solid rgba(209,218,255,.21); background:rgba(255,255,255,.065);
+  padding:7px 10px; border-radius:100px;}
+.lab-card-art {height:154px;position:relative;filter:drop-shadow(0 10px 17px rgba(0,0,0,.18));}
+.lab-art-card {position:absolute; width:104px;height:141px;left:45px;top:9px;
+  border-radius:12px; border:2px solid rgba(221,213,255,.9);
+  background:linear-gradient(135deg,#8170ef 0%,#433e92 43%,#22274e 100%);
+  box-shadow:inset 0 0 0 5px rgba(255,255,255,.09),0 9px 19px rgba(0,0,0,.17);transform:rotate(9deg);}
+.lab-art-card.secondary {transform:rotate(-13deg);left:17px;top:0;
+  background:linear-gradient(135deg,#60c7c8,#293f7f 65%,#1e3157);}
+.lab-art-card.front {display:flex;align-items:center;justify-content:center;color:#f9faff;
+  font-size:54px;font-weight:800;}
+.lab-art-card.front:after {content:"";position:absolute;inset:14px;border:1px solid rgba(255,255,255,.27);border-radius:8px;}
+.lab-stat-strip {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 16px;}
+.lab-stat {padding:14px 16px;border-radius:15px;
+  background:color-mix(in srgb, var(--secondary-background-color) 80%, var(--background-color));
+  border:1px solid rgba(133,143,179,.19);min-width:0;}
+.lab-stat b {font-size:1.2rem;line-height:1.3;font-weight:800;letter-spacing:-.025em;
+  color:var(--text-color);display:block;}
+.lab-stat span {color:color-mix(in srgb,var(--text-color) 66%,var(--background-color));
+  font-size:.74rem;line-height:1.4;display:block;margin-top:3px;}
+.lab-section {margin:3px 0 15px;}
+.lab-section .lab-section-kicker {font-size:10px;letter-spacing:.15em;font-weight:800;
+  color:#8d7cf5;text-transform:uppercase;}
+.lab-section h2 {font-size:clamp(1.18rem,2vw,1.5rem);letter-spacing:-.025em;
+  margin:4px 0 4px;font-weight:800;line-height:1.2;color:var(--text-color);}
+.lab-section p {font-size:.83rem;line-height:1.5;opacity:.73;margin:0;}
+.lab-card-name {font-size:.9rem;font-weight:800;color:var(--text-color);
+  margin-top:7px;line-height:1.3;min-height:2.25em;overflow-wrap:anywhere;}
+.lab-card-meta {display:flex;align-items:center;justify-content:space-between;gap:4px;
+  margin:5px 0 8px;min-height:24px;}
+.lab-card-meta span {font-size:.66rem;line-height:1.3;color:color-mix(in srgb,var(--text-color) 70%,var(--background-color));}
+.lab-card-count {padding:3px 6px;border-radius:7px;background:rgba(141,124,245,.15);
+  border:1px solid rgba(141,124,245,.29);font-weight:800!important;white-space:nowrap;}
+.lab-card-count.empty {background:transparent;border-color:rgba(130,140,170,.14);font-weight:500!important;}
+.lab-deck-summary {margin:4px 0 17px;padding:17px 18px;border:1px solid rgba(141,124,245,.25);
+  background:linear-gradient(125deg,rgba(141,124,245,.08),rgba(114,214,212,.035));border-radius:18px;}
+.lab-deck-summary-header {display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
+.lab-deck-summary-header strong {font-size:1.12rem;letter-spacing:-.018em;color:var(--text-color);}
+.lab-deck-summary-header span {font-size:.86rem;font-weight:800;color:var(--text-color);}
+.lab-deck-track {background:rgba(134,135,178,.19);border-radius:15px;height:9px;overflow:hidden;margin:12px 0 13px;}
+.lab-deck-fill {height:100%;border-radius:15px;background:linear-gradient(90deg,#8273ed,#68cbd4);}
+.lab-deck-chips {display:flex;flex-wrap:wrap;gap:7px;align-items:center;}
+.lab-chip {font-size:.72rem;font-weight:680;padding:6px 10px;border:1px solid rgba(138,148,182,.24);
+  border-radius:100px;color:var(--text-color);background:rgba(127,137,169,.055);}
+.lab-chip.energy {background:rgba(141,124,245,.09);border-color:rgba(141,124,245,.27);}
+.lab-chip.ready {border-color:rgba(74,176,151,.40);color:#3ba78d;}
+.lab-duel {display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:stretch;
+  gap:12px;margin:6px 0 13px;}
+.lab-duel-side {min-width:0;padding:14px 15px;border:1px solid rgba(143,149,185,.20);
+ background:color-mix(in srgb,var(--secondary-background-color) 77%,var(--background-color));border-radius:16px;}
+.lab-duel-side small {font-size:.65rem;letter-spacing:.13em;font-weight:800;color:#9284e6;display:block;margin-bottom:8px;}
+.lab-duel-side strong {color:var(--text-color);font-size:.94rem;line-height:1.25;display:block;overflow-wrap:anywhere;}
+.lab-duel-side span {font-size:.7rem;color:color-mix(in srgb,var(--text-color) 68%,var(--background-color));display:block;margin-top:7px;}
+.lab-duel-vs {align-self:center;color:#8a7ef5;font-weight:900;font-size:.9rem;letter-spacing:.08em;}
+.lab-results {border:1px solid rgba(144,155,190,.22);border-radius:18px;padding:16px 18px;margin:9px 0 12px;
+ background:color-mix(in srgb,var(--secondary-background-color) 67%,var(--background-color));}
+.lab-results-top {display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:13px;}
+.lab-results-top strong {font-size:1rem;line-height:1.35;}
+.lab-results-top span {font-size:.7rem;opacity:.7;}
+.lab-result-row {display:grid;grid-template-columns:minmax(0,1fr) 75px;gap:9px;margin:10px 0;align-items:center;}
+.lab-result-row .lab-result-label {font-size:.8rem;font-weight:680;overflow-wrap:anywhere;}
+.lab-result-row .lab-result-num {text-align:right;font-size:.85rem;font-weight:800;font-variant-numeric:tabular-nums;}
+.lab-result-bar {height:10px;border-radius:10px;background:rgba(139,145,173,.18);overflow:hidden;grid-column:1/3;}
+.lab-result-bar span {height:100%;display:block;background:linear-gradient(90deg,#8173ed,#ada2ff);border-radius:10px;}
+.lab-result-bar.alt span {background:linear-gradient(90deg,#339eae,#74d7d4);}
+.lab-results-note {margin-top:11px;font-size:.7rem;line-height:1.45;opacity:.69;}
+/* Native tabs stay scrollable on smaller phones and have larger touch targets. */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {overflow-x:auto;overflow-y:hidden;
+  scrollbar-width:thin;gap:6px;padding:2px 1px 6px;}
+[data-testid="stTabs"] button[data-baseweb="tab"] {white-space:nowrap;border-radius:10px 10px 0 0;
+  padding:10px 13px;font-weight:650;}
+[data-testid="stTabs"] [aria-selected="true"] {color:#8976ee!important;}
+[data-testid="stMetric"] {border:1px solid rgba(138,148,179,.16);padding:11px 14px;border-radius:14px;
+ background:color-mix(in srgb,var(--secondary-background-color) 78%,var(--background-color));}
+[data-testid="stButton"] button {border-radius:11px;min-height:38px;}
+[data-testid="stGrid"] [data-testid="stImage"] img {border-radius:9px;}
+[data-testid="stGrid"] [data-testid="stButton"] button {min-height:38px;padding:5px 7px;}
+[data-testid="stFileUploader"] {border-radius:13px;}
+@media(max-width:700px){
+ .block-container {padding-top:.6rem;padding-left:.70rem;padding-right:.70rem;}
+ .lab-hero {grid-template-columns:1fr;padding:20px 18px;border-radius:17px;gap:0;}
+ .lab-hero h1 {font-size:1.78rem!important;margin:10px 0 9px;}
+ .lab-hero p {font-size:.8rem;line-height:1.55;}
+ .lab-card-art {display:none;}
+ .lab-hero-tags {margin-top:15px;gap:5px;}
+ .lab-hero-tags span {font-size:.66rem;padding:5px 8px;}
+ .lab-stat-strip {gap:6px;margin-bottom:14px;}
+ .lab-stat {padding:11px 8px;border-radius:12px;}
+ .lab-stat b {font-size:1.03rem;}
+ .lab-stat span {font-size:.64rem;}
+ .lab-deck-summary {padding:14px;border-radius:15px;}
+ .lab-duel {gap:5px;}
+ .lab-duel-side {padding:11px 9px;border-radius:12px;}
+ .lab-duel-side strong {font-size:.78rem;}
+ .lab-duel-side span {font-size:.63rem;}
+ .lab-duel-vs {font-size:.7rem;}
+ .lab-card-name {font-size:.78rem;}
+ .lab-card-meta span {font-size:.61rem;}
+ [data-testid="stGrid"] [data-testid="stButton"] button {min-height:40px;}
+}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after {animation-duration:.01ms!important;transition-duration:.01ms!important;}}
+</style>
+"""
+
+
+def safe(value: object) -> str:
+    return escape(str(value), quote=True)
+
+
+def is_pokemon(card: dict) -> bool:
+    # The core catalog labels Pokémon as 'Pokémon'. Other categories are trainers.
+    return str(card.get('type', '')).casefold() in ('pokémon', 'pokemon')
+
+
+def deck_breakdown(counts: dict, by_id: dict) -> dict:
+    summary = {'pokemon': 0, 'trainers': 0, 'unknown': 0}
+    for cid, qty in counts.items():
+        if cid not in by_id:
+            summary['unknown'] += qty
+        elif is_pokemon(by_id[cid]):
+            summary['pokemon'] += qty
+        else:
+            summary['trainers'] += qty
+    return summary
+
+
+def energy_chips(energy_types) -> str:
+    chips = []
+    for energy in energy_types:
+        icon, label = ENERGY_META.get(energy, ('◆', str(energy)))
+        chips.append(f'<span class="lab-chip energy">{safe(icon)} {safe(label)}</span>')
+    return ''.join(chips) or '<span class="lab-chip">Selecione a energia</span>'
+
+
+def hero(catalog_count: int, deck_count: int) -> str:
+    catalog_label = f'{int(catalog_count):,}'.replace(',', '.')
+    return f'''<section class="lab-hero" aria-label="TCG Pocket Lab">
+       <div><div class="lab-eyebrow"><i class="lab-live-dot" aria-hidden="true"></i>
+       TCG POCKET LAB <span style="opacity:.55">/ BETA {VERSION}</span></div>
+       <h1>Seu deck.<br><span>Seu laboratório.</span></h1>
+       <p>Monte uma lista com as cartas do Pocket, investigue habilidades e teste
+       estratégias com simulações auditadas.</p>
+       <div class="lab-hero-tags"><span>✦ IA tática</span>
+       <span>◈ Replays por semente</span><span>◇ Dados experimentais</span></div></div>
+       <div class="lab-card-art" aria-hidden="true"><div class="lab-art-card secondary"></div>
+       <div class="lab-art-card front">✦</div></div></section>
+       <div class="lab-stat-strip" aria-label="Visão geral">
+         <div class="lab-stat"><b>{catalog_label}</b><span>Cartas no catálogo</span></div>
+         <div class="lab-stat"><b>{int(deck_count)} / 20</b><span>Seu deck</span></div>
+         <div class="lab-stat"><b>v0.9.1</b><span>Laboratório beta</span></div>
+       </div>'''
+
+
+def section(title: str, subtitle: str = '', kicker: str = 'LABORATÓRIO') -> str:
+    return (f'<header class="lab-section"><div class="lab-section-kicker">{safe(kicker)}</div>'
+            f'<h2>{safe(title)}</h2><p>{safe(subtitle)}</p></header>')
+
+
+def card_caption(card: dict, selected: int) -> str:
+    # Native image and controls live outside HTML, retaining accessibility.
+    return (f'<div class="lab-card-name">{safe(card.get("name", ""))}</div>'
+            f'<div class="lab-card-meta"><span>{safe(card.get("set", ""))} · '
+            f'#{safe(card.get("number", ""))}</span>'
+            f'<span class="lab-card-count {"empty" if selected == 0 else ""}">'
+            f'{selected}/2</span></div>')
+
+
+def deck_overview(counts: dict, by_id: dict, energy_types) -> str:
+    total = sum(counts.values())
+    parts = deck_breakdown(counts, by_id)
+    percent = min(100, max(0, 100 * total / 20))
+    chips = (f'<span class="lab-chip">♟ {parts["pokemon"]} Pokémon</span>'
+             f'<span class="lab-chip">▤ {parts["trainers"]} Treinadores</span>')
+    if parts['unknown']:
+        chips += f'<span class="lab-chip">{parts["unknown"]} não encontradas</span>'
+    chips += energy_chips(energy_types)
+    # Do not claim legal deck simply because the card count is twenty.
+    status = '20 cartas selecionadas' if total == 20 else f'Faltam {max(0, 20-total)} cartas'
+    return f'''<section class="lab-deck-summary" aria-label="Composição do deck">
+      <div class="lab-deck-summary-header"><strong>{safe(status)}</strong>
+      <span>{total} / 20</span></div>
+      <div class="lab-deck-track" role="progressbar" aria-label="Cartas no deck"
+           aria-valuenow="{min(20,max(0,total))}" aria-valuemin="0" aria-valuemax="20">
+           <div class="lab-deck-fill" style="width:{percent:.2f}%"></div></div>
+      <div class="lab-deck-chips">{chips}</div></section>'''
+
+
+def matchup_preview(left: dict, right: dict) -> str:
+    def panel(side, label):
+        name = side.get('recognized_name') or side.get('name') or label
+        energy = ', '.join(ENERGY_META.get(x, ('', x))[1] for x in side.get('energy_types', []))
+        signature = str(side.get('signature', ''))[:10]
+        return (f'<div class="lab-duel-side"><small>{safe(label)}</small><strong>{safe(name)}</strong>'
+                f'<span>{safe(energy)} · {safe(signature)}</span></div>')
+    return (f'<div class="lab-duel" aria-label="Decks do confronto">'
+            f'{panel(left,"MEU DECK")}<div class="lab-duel-vs">VS</div>'
+            f'{panel(right,"ADVERSÁRIO")}</div>')
+
+
+def result_bars(left_name: str, right_name: str, outcomes: dict, completed: int) -> str:
+    n = max(0, int(completed))
+    a = int(outcomes.get('left', 0))
+    b = int(outcomes.get('right', 0))
+    draws = int(outcomes.get('draw', 0))
+    if not n:
+        return '<div class="lab-results">Nenhuma partida concluída.</div>'
+    rows = ''
+    for name, count, suffix in [(left_name, a, ''), (right_name, b, 'alt')]:
+        percentage = 100.0 * count / n
+        rows += (f'<div class="lab-result-row"><span class="lab-result-label">{safe(name)}</span>'
+                 f'<span class="lab-result-num">{percentage:.1f}%</span>'
+                 f'<div class="lab-result-bar {suffix}" role="img" '
+                 f'aria-label="{safe(name)}: {count} vitórias em {n} partidas">'
+                 f'<span style="width:{percentage:.2f}%"></span></div></div>')
+    draw_label = f'{draws} empate' if draws == 1 else f'{draws} empates'
+    return (f'<section class="lab-results"><div class="lab-results-top"><strong>Resultado do lote</strong>'
+            f'<span>{n} partidas · {draw_label}</span></div>{rows}'
+            '<div class="lab-results-note">Percentuais exclusivos deste motor experimental; '
+            'não representam chances reais de vitória.</div></section>')
