@@ -1,16 +1,39 @@
-"""Bounded, replayable technical matchup runs for TCG Pocket Lab v0.8.3.
+"""Bounded, replayable technical matchup runs for TCG Pocket Lab v0.8.4.
 
 Never present these results as verified metagame probabilities: the v0.8.x
 agent is heuristic and this engine does not model all real-game interactions.
 """
 from __future__ import annotations
 from collections import Counter
+import inspect
 from time import monotonic
 from typing import Callable
-from battle_engine import Card, RuleAgent, RuleError, UnsupportedEffect, validate_deck
+import battle_engine
+from battle_engine import Battle, Card, RuleAgent, RuleError, UnsupportedEffect, validate_deck
 from battle_audit import AuditedBattle, StateInvariantError, snapshot
+from deck_identity import describe_compiled, compare_decks
 
 MAX_BATCH_GAMES = 1_000
+
+
+def verify_engine_compatibility() -> None:
+    """Fail before running matches if Streamlit has mixed old/new Python modules.
+
+    A stale battle_engine.py previously produced a redacted TypeError from
+    AuditedBattle.__init__ when force_first was passed. Do not silently use
+    the old engine: a different implementation invalidates the batch audit.
+    """
+    expected_api = 2
+    version = getattr(battle_engine, 'ENGINE_API_VERSION', None)
+    parameters = inspect.signature(Battle.__init__).parameters
+    if version != expected_api or 'force_first' not in parameters:
+        raise RuleError(
+            'Versões incompatíveis do motor de partidas: o lote v0.8.3.1 '
+            'requer battle_engine.py e battle_audit.py da mesma atualização. '
+            'Substitua os quatro arquivos do hotfix no GitHub e reinicie o '
+            'Streamlit em Manage app → Reboot app.'
+        )
+
 
 
 def run_technical_batch(left: list[Card], right: list[Card],
@@ -18,7 +41,9 @@ def run_technical_batch(left: list[Card], right: list[Card],
                         line_map: dict[str, str] | None = None,
                         games: int = 100, seed: int = 20261116,
                         progress: Callable[[int, int], None] | None = None,
-                        keep_replay: bool = True) -> dict:
+                        keep_replay: bool = True,
+                        left_payload: dict | None = None,
+                        right_payload: dict | None = None) -> dict:
     """Fair, deterministic experiment: two seating orders and first-player balance.
 
     The unaltered original decks are always 'left' and 'right'; if a round
@@ -29,16 +54,22 @@ def run_technical_batch(left: list[Card], right: list[Card],
         raise ValueError(f'games must be 1..{MAX_BATCH_GAMES}')
     if type(seed) is not int or seed < 0:
         raise ValueError('seed must be a nonnegative integer')
+    verify_engine_compatibility()
     left_e, right_e = tuple(energy_left), tuple(energy_right)
     validate_deck(left, left_e)
     validate_deck(right, right_e)
     if len(left_e) != 1 or len(right_e) != 1:
         raise UnsupportedEffect('Multicolor Energy Zone is unsupported')
 
+    left_identity = describe_compiled(left, left_e, left_payload, fallback_name='Meu deck')
+    right_identity = describe_compiled(right, right_e, right_payload, fallback_name='Adversário')
+    matchup = compare_decks(left_identity, right_identity)
+
     counts = Counter()
     splits = {'left_first': Counter(), 'right_first': Counter()}
     seat_splits = {'left_as_p0': Counter(), 'left_as_p1': Counter()}
     errors = []
+    rounds = []
     total_actions = 0
     total_turns = 0
     replay = None
@@ -67,28 +98,47 @@ def run_technical_batch(left: list[Card], right: list[Card],
             counts[outcome] += 1
             splits['left_first' if left_goes_first else 'right_first'][outcome] += 1
             seat_splits['left_as_p1' if reverse else 'left_as_p0'][outcome] += 1
+            rounds.append({
+                'round': idx + 1, 'seed': seed + idx,
+                'p0_deck': left_identity['signature'] if not reverse else right_identity['signature'],
+                'p1_deck': right_identity['signature'] if not reverse else left_identity['signature'],
+                'first_player': first_side, 'winner': battle.winner,
+                'outcome': outcome, 'half_turns': battle.turn,
+            })
             total_actions += battle.checked_actions
             total_turns += battle.turn
             if keep_replay and idx == 0:
                 replay = {
-                    'seed': seed, 'winner': battle.winner,
+                    'seed': seed, 'round': idx + 1, 'winner': battle.winner,
                     'first_player': battle.first, 'turns': battle.turn,
                     'events': list(battle.log), 'snapshots': battle.trace,
                     'energy_p0': list(ea), 'energy_p1': list(eb),
+                    'p0_deck': left_identity if not reverse else right_identity,
+                    'p1_deck': right_identity if not reverse else left_identity,
+                    'left_deck': left_identity, 'right_deck': right_identity,
                     'note': 'Technical prototype replay, not a certified real-game match.'
                 }
-        except (RuleError, ValueError, IndexError, AssertionError) as ex:
+        except (RuleError, ValueError, IndexError, AssertionError, TypeError) as ex:
             errors.append({'round': idx + 1, 'seed': seed + idx,
                            'type': type(ex).__name__, 'message': str(ex),
+                           'p0_deck': left_identity['signature'] if not reverse else right_identity['signature'],
+                           'p1_deck': right_identity['signature'] if not reverse else left_identity['signature'],
+                           'first_player': first_side,
                            'events': battle.log[-25:] if battle else []})
-            if len(errors) >= 10:
-                break  # fail closed on systemic errors, not thousands of invalid rounds
+            if isinstance(ex, TypeError) or len(errors) >= 10:
+                # TypeErrors indicate an implementation/schema mismatch, not a loss.
+                # Do not fabricate further wins/losses or repeat a broken round.
+                break
         if progress and ((idx + 1) % 25 == 0 or idx + 1 == games):
             progress(idx + 1, games)
     valid = sum(counts.values())
     attempted = valid + len(errors)
     return {
         'kind': 'technical_prototype_batch',
+        'version': '0.8.4',
+        'decks': {'left': left_identity, 'right': right_identity},
+        'matchup': matchup,
+        'rounds': rounds,
         'validated_competitive': False,
         'disclaimer': ('Contagens de um agente heurístico em motor parcial. '
                        'NÃO são probabilidades reais de vitória do metagame.'),

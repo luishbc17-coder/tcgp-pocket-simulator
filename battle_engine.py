@@ -1,4 +1,4 @@
-"""TCG Pocket rules kernel, v0.8.3.
+"""TCG Pocket rules kernel, v0.8.4.
 
 Only effects explicitly identified in cards are executable. Unsupported text MUST
 prevent a real matchup from being run; tests may use synthetic fixtures.
@@ -12,6 +12,7 @@ ENERGY_CODES = {'G': 'grass', 'R': 'fire', 'W': 'water', 'L': 'lightning',
                 'P': 'psychic', 'F': 'fighting', 'D': 'darkness',
                 'M': 'metal', 'C': 'colorless'}
 MAX_TURNS = 30
+ENGINE_API_VERSION = 2  # v0.8.3.1 batch/audit protocol: supports forced first player
 
 class RuleError(ValueError):
     pass
@@ -196,11 +197,13 @@ class Battle:
             evolution.stage != target.card.stage + 1 or
             evolution.evolves_from.casefold() != target.card.name.casefold()):
             raise RuleError('Illegal evolution')
+        old_name = target.card.name
+        old_spot = 'Ativo' if target is p.active else 'Banco'
         p.hand.remove(evolution)
         target.card = evolution
         target.status = ''  # Evolving removes Special Conditions.
         target.evolved_at = self.turn
-        self.log.append(f'P{i} evolves to {evolution.name}')
+        self.log.append(f'P{i} evolves {old_name} -> {evolution.name} ({old_spot})')
 
     def rare_candy(self, candy: Card, target: InPlay, evolution: Card, line_map: dict[str, str]):
         i = self.current
@@ -212,12 +215,14 @@ class Battle:
             evolution not in p.hand or evolution.stage != 2 or
             line_map.get(evolution.evolves_from.casefold(), '').casefold() != target.card.name.casefold()):
             raise RuleError('Illegal Rare Candy')
+        old_name = target.card.name
+        old_spot = 'Ativo' if target is p.active else 'Banco'
         p.hand.remove(candy)
         p.hand.remove(evolution)
         target.card = evolution
         target.status = ''  # Evolving removes Special Conditions.
         target.evolved_at = self.turn
-        self.log.append(f'P{i} Rare Candy to {evolution.name}')
+        self.log.append(f'P{i} Rare Candy: {old_name} -> {evolution.name} ({old_spot})')
 
     def attach(self, target: InPlay):
         i = self.current
@@ -313,10 +318,13 @@ class Battle:
                 p.deck.append(found)
         elif card.effect == 'copycat':
             p.hand.remove(card)
+            shuffled_count = len(p.hand)
+            opponent_hand = len(opp.hand)
             p.deck.extend(p.hand)
             p.hand.clear()
             self.rng.shuffle(p.deck)
-            self.draw(i, len(opp.hand))
+            self.draw(i, opponent_hand)
+            self.log.append(f'P{i} Copycat: shuffles {shuffled_count} hand cards, draws {len(p.hand)} (opponent had {opponent_hand})')
         elif card.effect == 'center_lady':
             candidates = p.all_in_play()
             if target is None:
@@ -325,9 +333,11 @@ class Battle:
                 raise RuleError('Pokémon Center Lady target must be your Pokémon')
             if target.damage == 0 and not target.status:
                 raise RuleError('Pokémon Center Lady has nothing to heal')
+            amount = min(30, target.damage)
             target.damage = max(0,target.damage-30)
             target.status = ''
             p.hand.remove(card)
+            self.log.append(f'P{i} Pokémon Center Lady heals {amount} from {target.card.name}, clears status')
         elif card.effect == 'repel':
             if not opp.active or opp.active.card.stage != 0 or not opp.bench:
                 raise RuleError('Repel requires opposing Basic Active and Bench')
@@ -342,12 +352,16 @@ class Battle:
             opp.bench.remove(target)
             opp.active=target
             opp.bench.append(old)
+            self.log.append(f'P{i} Repel switches P{1-i} Active {old.card.name} -> {target.card.name} (Basic; opposing Bench)')
         elif card.effect == 'mars':
             p.hand.remove(card)
+            shuffled_count = len(opp.hand)
+            draw_count = max(0, 3 - opp.points)
             opp.deck.extend(opp.hand)
             opp.hand.clear()
             self.rng.shuffle(opp.deck)
-            self.draw(1-i, max(0, 3 - opp.points))
+            self.draw(1-i, draw_count)
+            self.log.append(f'P{i} Mars: P{1-i} shuffles {shuffled_count} hand cards and draws {len(opp.hand)} (remaining points {draw_count})')
         elif card.effect == 'cyrus':
             candidates = [x for x in opp.bench if x.damage > 0]
             if not candidates:
@@ -363,11 +377,14 @@ class Battle:
             if old:
                 old.status = ''
                 opp.bench.append(old)
+            self.log.append(f'P{i} Cyrus switches P{1-i} Active {old.card.name if old else "none"} -> {target.card.name} ({target.damage} damage; opposing Bench)')
         elif card.effect == 'lucky_ice_pop':
             if not p.active or p.active.damage == 0:
                 raise RuleError('Lucky Ice Pop needs a damaged Active Pokémon')
             p.hand.remove(card)
+            healed = min(p.active.damage, 20)
             p.active.damage = max(0, p.active.damage - 20)
+            self.log.append(f'P{i} Lucky Ice Pop heals {healed} from {p.active.card.name}')
             if self.rng.choice((True, False)):
                 p.hand.append(card)
                 self.log.append('Lucky Ice Pop coin: heads, returned to hand')
@@ -376,6 +393,7 @@ class Battle:
         elif card.effect == 'x_speed':
             p.hand.remove(card)
             p.retreat_discount += 1
+            self.log.append(f'P{i} X Speed: retreat cost discounted by {p.retreat_discount} this turn')
         elif card.effect == 'field_blower':
             found = [x for x in opp.all_in_play() if x.tool is not None] or [
                 x for x in p.all_in_play() if x.tool is not None]
@@ -385,8 +403,11 @@ class Battle:
                 target = found[0]
             if target not in found:
                 raise RuleError('Field Blower target must have a Tool')
+            removed = target.tool.name
             target.tool = None
             p.hand.remove(card)
+            owner = i if target in p.all_in_play() else 1-i
+            self.log.append(f'P{i} Field Blower: removes {removed} from P{owner} {target.card.name}')
         else:
             raise UnsupportedEffect('Trainer effect requires handler')
         if card.kind == 'supporter':
@@ -445,7 +466,7 @@ class Battle:
         if damage > 0 and them.active.card.weakness == me.active.card.element:
             damage += 20
         them.active.damage += damage
-        self.log.append(f'P{i} {selected.name}, {damage} damage')
+        self.log.append(f'P{i} {me.active.card.name} uses {selected.name}, {damage} damage to P{1-i} Active {them.active.card.name}')
         if selected.effect == 'item_lock_next_turn':
             them.item_locked = True
         if selected.effect == 'sleep_active':

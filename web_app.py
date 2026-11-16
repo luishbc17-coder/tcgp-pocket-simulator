@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.8.3: audited technical batches, safe deck transfer."""
+"""TCG Pocket Lab v0.8.4: identified matchups, mirror detection, full batch provenance."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -12,7 +12,8 @@ from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_
 from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
 from deck_transfer import stage_transfer, apply_pending_transfer
-from batch_runner import run_technical_batch, MAX_BATCH_GAMES
+from batch_runner import run_technical_batch, MAX_BATCH_GAMES, verify_engine_compatibility
+from deck_identity import describe_selection, compare_decks
 
 META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
@@ -30,6 +31,9 @@ st.markdown("""<style>
 
 for key, default in {'counts':{},'deck_name':'Meu deck','energy':['water'],'saved_decks':{},'page':1}.items():
     if key not in st.session_state: st.session_state[key] = default
+if 'preset_opponent' not in st.session_state:
+    # Altaria is typically the left deck; default to the intended opposing archetype.
+    st.session_state.preset_opponent = 'hoopa_mega_absol'
 # Migrate energy selections saved by older versions of the UI.
 if any(e not in ENERGIES for e in st.session_state.energy):
     st.session_state.energy = [e for e in st.session_state.energy if e in ENERGIES] or ['water']
@@ -78,7 +82,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.8.3','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.8.4','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     """Validate and stage import; apply it on the next Streamlit script run.
@@ -94,7 +98,7 @@ def load_payload(data):
 apply_pending_transfer(st.session_state)
 
 st.title('🃏 TCG Pocket Lab')
-st.caption(f'v0.8.3 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
+st.caption(f'v0.8.4 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
 st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
 _notice = st.session_state.pop('_deck_transfer_notice', None)
 if _notice:
@@ -196,7 +200,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8.3)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8.4)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -226,10 +230,15 @@ with lab_tab:
         except (ValueError, KeyError) as exc:
             st.error(f'Não foi possível carregar o preset: {exc}')
     opponent_mode = st.radio('Deck adversário',
-        ['Deck do meta (v0.8.3)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
+        ['Deck do meta (v0.8.4)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
         horizontal=False, key='opponent_mode')
     opponent_payload = None
-    if opponent_mode == 'Deck do meta (v0.8.3)':
+    if opponent_mode == 'Deck do meta (v0.8.4)':
+        def choose_hoopa_opponent():
+            st.session_state.preset_opponent = 'hoopa_mega_absol'
+        st.button('⚔️ Selecionar Hoopa ex / Mega Absol ex como adversário',
+                  on_click=choose_hoopa_opponent, key='select_hoopa_v084',
+                  use_container_width=True)
         selected_slug = st.selectbox('Escolha o adversário', list(DECKS),
                                      format_func=lambda slug: DECKS[slug]['name'],
                                      key='preset_opponent')
@@ -292,6 +301,18 @@ with lab_tab:
         else:
             left_r = match_report['player']
             right_r = match_report['opponent']
+            preview_left = describe_selection(payload(), 'Meu deck')
+            preview_right = describe_selection(opponent_payload, 'Adversário')
+            preview_comparison = compare_decks(preview_left, preview_right)
+            st.markdown('**Confronto selecionado:** ' +
+                        f'**{preview_left["recognized_name"] or preview_left["name"]}** '
+                        f'({", ".join(preview_left["energy_types"])}) × '
+                        f'**{preview_right["recognized_name"] or preview_right["name"]}** '
+                        f'({", ".join(preview_right["energy_types"])})')
+            st.caption(f'Identidade das listas (IDs, cópias e energia): '
+                       f'{preview_left["signature"][:12]} × {preview_right["signature"][:12]}')
+            if preview_comparison['warning']:
+                st.warning(preview_comparison['warning'])
             c1,c2 = st.columns(2, gap='small')
             c1.metric('Meu deck — efeitos suportados',f'{left_r["supported"]}/{left_r["total"]}')
             c2.metric('Adversário — efeitos suportados',f'{right_r["supported"]}/{right_r["total"]}')
@@ -365,40 +386,60 @@ with lab_tab:
                                        json.dumps(trace,ensure_ascii=False,indent=2),
                                        file_name='duelo_debug.json',mime='application/json')
                 st.divider()
-                st.subheader('🧪 Lote técnico auditado — até 1.000 partidas')
+                st.subheader('🧪 Lote técnico auditado v0.8.4 — até 1.000 partidas')
                 st.warning('Estes resultados medem o comportamento de uma IA experimental num '
                            'motor ainda incompleto. NÃO são probabilidades confiáveis de vitória no meta.')
                 st.caption('A cada quatro partidas o teste alterna a posição dos decks e quem começa. '
                            'Cada ação é verificada; falhas são contabilizadas separadamente.')
+                try:
+                    verify_engine_compatibility()
+                except RuleError as incompatibility:
+                    st.error(str(incompatibility))
+                    st.info('O lote fica bloqueado até os módulos do motor serem sincronizados.')
                 batch_n = st.select_slider('Quantidade de partidas técnicas',
-                      options=[25, 100, 250, 500, 1000], value=1000, key='batch_n_v083')
+                      options=[25, 100, 250, 500, 1000], value=1000, key='batch_n_v084')
                 batch_seed = st.number_input('Semente inicial do lote', min_value=0,
-                      value=20261116, key='batch_seed_v083')
-                if st.button('▶ Executar lote técnico com auditoria', key='run_batch_v083',
+                      value=20261116, key='batch_seed_v084')
+                if st.button('▶ Executar lote técnico com auditoria', key='run_batch_v084',
                              use_container_width=True):
                     bar = st.progress(0, text='Verificando as partidas...')
                     def update_batch_progress(done, expected):
                         bar.progress(min(done / expected, 1.0),
                                      text=f'{done}/{expected} partidas processadas')
                     try:
+                        selected_left = payload()
+                        selected_right = opponent_payload
                         report_batch = run_technical_batch(
-                            load_compiled_deck(payload(), game_cards),
-                            load_compiled_deck(opponent_payload, game_cards),
-                            energy_left=tuple(payload()['energy_types']),
-                            energy_right=tuple(opponent_payload['energy_types']),
+                            load_compiled_deck(selected_left, game_cards),
+                            load_compiled_deck(selected_right, game_cards),
+                            energy_left=tuple(selected_left['energy_types']),
+                            energy_right=tuple(selected_right['energy_types']),
+                            left_payload=selected_left, right_payload=selected_right,
                             line_map=evolution_line_map(game_cards),
                             games=int(batch_n), seed=int(batch_seed),
                             progress=update_batch_progress)
-                        st.session_state['technical_batch_v083'] = {
-                            'left': payload(), 'right': opponent_payload,
+                        st.session_state['technical_batch_v084'] = {
+                            'left': selected_left, 'right': selected_right,
                             'report': report_batch}
-                    except (RuleError, UnsupportedEffect, ValueError, IndexError) as exc:
-                        st.error(f'O lote foi interrompido: {exc}')
+                    except (RuleError, UnsupportedEffect, ValueError, IndexError, TypeError) as exc:
+                        st.error(f'O lote foi interrompido (verifique a versão do motor): {exc}')
                     finally:
                         bar.empty()
-                stored = st.session_state.get('technical_batch_v083')
+                stored = st.session_state.get('technical_batch_v084')
                 if stored and stored['left'] == payload() and stored['right'] == opponent_payload:
                     result = stored['report']
+                    report_left, report_right = result['decks']['left'], result['decks']['right']
+                    st.markdown('**Decks confirmados no lote**')
+                    st.caption(f'Esquerdo: {report_left["recognized_name"] or report_left["name"]} '
+                               f'· {report_left["card_count"]} cartas · '
+                               f'{", ".join(report_left["energy_types"])} · '
+                               f'ID {report_left["signature"][:12]}')
+                    st.caption(f'Direito: {report_right["recognized_name"] or report_right["name"]} '
+                               f'· {report_right["card_count"]} cartas · '
+                               f'{", ".join(report_right["energy_types"])} · '
+                               f'ID {report_right["signature"][:12]}')
+                    if result['matchup']['warning']:
+                        st.warning(result['matchup']['warning'])
                     r1,r2,r3 = st.columns(3)
                     r1.metric('Partidas processadas',result['attempted'])
                     r2.metric('Sem falhas de estado',result['completed'])
@@ -415,8 +456,8 @@ with lab_tab:
                                f'Primeira semente: {result["seed"]}'.replace(',', '.'))
                     with st.expander('Contagem técnica de saídas da IA (não é win rate)',expanded=False):
                         st.dataframe([
-                            {'Saída técnica':'Meu deck', 'Partidas':result['outcomes']['left']},
-                            {'Saída técnica':'Adversário', 'Partidas':result['outcomes']['right']},
+                            {'Saída técnica':report_left['recognized_name'] or report_left['name'], 'Partidas':result['outcomes']['left']},
+                            {'Saída técnica':report_right['recognized_name'] or report_right['name'], 'Partidas':result['outcomes']['right']},
                             {'Saída técnica':'Empate', 'Partidas':result['outcomes']['draw']}
                         ],use_container_width=True,hide_index=True)
                         st.write('Distribuição por quem começou:')
@@ -424,13 +465,30 @@ with lab_tab:
                         st.write('Distribuição por posição P0/P1:')
                         st.json(result['seating_splits'])
                         st.caption('Não interprete essas contagens como chances de ganhar partidas reais.')
+                    with st.expander('Identidade verificada em cada partida'):
+                        st.caption('P0/P1 são posições; os IDs identificam a composição das cartas e os tipos de energia.')
+                        st.dataframe([{
+                            'Partida':r['round'], 'Semente':r['seed'],
+                            'P0': ('Esquerdo' if r['p0_deck']==report_left['signature'] else 'Direito') if not result['matchup']['is_mirror'] else 'Espelhado',
+                            'P1': ('Esquerdo' if r['p1_deck']==report_left['signature'] else 'Direito') if not result['matchup']['is_mirror'] else 'Espelhado',
+                            'Começou':f'P{r["first_player"]}',
+                            'Resultado':r['outcome'],
+                            'Meios-turnos':r['half_turns'],
+                        } for r in result['rounds']], use_container_width=True, hide_index=True)
                     if result.get('sample_replay'):
                         with st.expander('Replay auditado — primeira partida'):
                             st.caption('Contém estados após cada ação: HP, dano, energias, Banco e pontos.')
-                            st.code('\n'.join(result['sample_replay']['events'][-250:]), language=None)
+                            sample = result['sample_replay']
+                            st.caption(f'P0: {sample["p0_deck"]["recognized_name"] or sample["p0_deck"]["name"]} · '
+                                       f'P1: {sample["p1_deck"]["recognized_name"] or sample["p1_deck"]["name"]}')
+                            st.code('\n'.join(sample['events'][-250:]), language=None)
+                            st.download_button('⬇ Baixar replay e estados (JSON)',
+                                json.dumps(sample, ensure_ascii=False, indent=2),
+                                file_name='replay_auditado_v084.json', mime='application/json',
+                                use_container_width=True)
                     st.download_button('⬇ Baixar relatório do lote (JSON)',
                         json.dumps(result,ensure_ascii=False,indent=2),
-                        file_name='lote_tecnico_v083.json', mime='application/json',
+                        file_name='lote_tecnico_v084.json', mime='application/json',
                         use_container_width=True)
             else:
                 st.warning('Duelo técnico bloqueado: corrija os problemas listados nos dois decks.')
@@ -456,7 +514,7 @@ with lab_tab:
                            file_name='experimento.json')
     st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.8.3')
+    st.subheader('Motor de regras v0.8.4')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA básica, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
