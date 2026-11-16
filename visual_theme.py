@@ -1,4 +1,4 @@
-"""Presentation-only helpers for TCG Pocket Lab v0.9.2.
+"""Presentation-only helpers for TCG Pocket Lab v0.9.3.
 
 Keep this module free from Streamlit and battle engine imports so user-facing
 markup is independently testable. Never trust deck/card display strings as HTML.
@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.2'
+VERSION = '0.9.3'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),
@@ -20,7 +20,7 @@ ENERGY_META = {
 
 CSS = r"""
 <style>
-/* V0.9.2 -- design changes are scoped: the native Streamlit controls remain accessible. */
+/* V0.9.3 -- design changes are scoped: the native Streamlit controls remain accessible. */
 :root { --lab-accent: #8d7cf5; --lab-cyan: #72d6d4; --lab-muted: #98a2bc; }
 .block-container { max-width: 1180px; padding-top: 2.1rem; padding-bottom: 4rem; }
 [data-testid="stAppViewContainer"] {
@@ -218,7 +218,7 @@ def hero(catalog_count: int, deck_count: int) -> str:
        <div class="lab-stat-strip" aria-label="Visão geral">
          <div class="lab-stat"><b>{catalog_label}</b><span>Cartas no catálogo</span></div>
          <div class="lab-stat"><b>{int(deck_count)} / 20</b><span>Seu deck</span></div>
-         <div class="lab-stat"><b>v0.9.2</b><span>Laboratório beta</span></div>
+         <div class="lab-stat"><b>v{VERSION}</b><span>Laboratório beta</span></div>
        </div>'''
 
 

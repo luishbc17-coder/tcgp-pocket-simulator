@@ -66,6 +66,11 @@ class InPlay:
     tool: Card | None = None
     status: str = ''  # only Asleep currently implemented
 
+    @property
+    def max_hp(self) -> int:
+        """Giant Cape increases maximum HP; its removal can cause a KO."""
+        return self.card.hp + (20 if self.tool and self.tool.effect == 'giant_cape' else 0)
+
 
 @dataclass
 class Player:
@@ -204,6 +209,12 @@ class Battle:
         target.status = ''  # Evolving removes Special Conditions.
         target.evolved_at = self.turn
         self.log.append(f'P{i} evolves {old_name} -> {evolution.name} ({old_spot})')
+        # Ignition triggers only when Charmeleon is played from hand to evolve.
+        # It is separate from the regular once-per-turn Energy attachment.
+        if (evolution.ability == 'ignition' and p.energy_types == ('fire',)
+                and p.active and p.active.card.element == 'fire'):
+            p.active.energy.append('fire')
+            self.log.append(f'P{i} Charmeleon — Ignition: +1 fire to Active {p.active.card.name}')
 
     def rare_candy(self, candy: Card, target: InPlay, evolution: Card, line_map: dict[str, str]):
         i = self.current
@@ -238,6 +249,14 @@ class Battle:
         if target.card.ability == 'nightmare_aura' and energy == 'darkness':
             self._damage_target(1-i, self.players[1-i].active, 20, i, source='Darkrai ex — Nightmare Aura')
 
+    @staticmethod
+    def attack_damage_after_tool(pokemon: InPlay, amount: int) -> int:
+        """Only attacks (not abilities or self damage) are reduced by Eviolite."""
+        if (pokemon.tool and pokemon.tool.effect == 'eviolite'
+                and pokemon.card.stage == 0):
+            return max(0, amount - 20)
+        return amount
+
     def _damage_target(self, victim: int, pokemon: InPlay | None, amount: int,
                        scorer: int, source: str, attack_damage=False):
         """Apply direct/bench damage (without weakness), then resolve KO.
@@ -246,9 +265,11 @@ class Battle:
         """
         if pokemon is None or self.finished or amount < 0:
             return
+        if attack_damage and victim != scorer:
+            amount = self.attack_damage_after_tool(pokemon, amount)
         pokemon.damage += amount
         self.log.append(f'{source}: {amount} damage to P{victim} {pokemon.card.name}')
-        if pokemon.damage >= pokemon.card.hp:
+        if pokemon.damage >= pokemon.max_hp:
             if self.players[victim].active is pokemon:
                 self._knockout(victim, scorer, from_attack=attack_damage)
             elif pokemon in self.players[victim].bench:
@@ -264,20 +285,39 @@ class Battle:
                     self.winner = scorer
 
     def use_ability(self, pokemon: InPlay, target: InPlay | None = None):
-        """Explicit activation of Greninja's once-per-turn Water Shuriken."""
+        """Execute only explicit, compiled once-per-turn abilities.
+
+        Volt Charge/Ice Maker attach one extra typed Energy from a *single-type*
+        Energy Zone and do not consume the regular manual attachment.
+        """
         i = self.current
         self._require_action(i)
         own, other = self.players[i], self.players[1-i]
-        if pokemon not in own.all_in_play() or pokemon.card.ability != 'water_shuriken':
-            raise RuleError('Water Shuriken is unavailable')
-        if pokemon.ability_used_turn == self.turn:
-            raise RuleError('Water Shuriken already used this turn')
-        if target is None:
-            target = other.active
-        if target not in other.all_in_play():
-            raise RuleError('Water Shuriken target not in play')
-        pokemon.ability_used_turn = self.turn
-        self._damage_target(1-i, target, 20, i, source='Greninja — Water Shuriken')
+        if pokemon not in own.all_in_play() or pokemon.ability_used_turn == self.turn:
+            raise RuleError('Ability is unavailable or already used this turn')
+        effect = pokemon.card.ability
+        if effect == 'water_shuriken':
+            if target is None:
+                target = other.active
+            if target not in other.all_in_play():
+                raise RuleError('Water Shuriken target not in play')
+            pokemon.ability_used_turn = self.turn
+            self._damage_target(1-i, target, 20, i, source='Greninja — Water Shuriken')
+        elif effect == 'volt_charge':
+            if own.energy_types != ('lightning',):
+                raise RuleError('Volt Charge requires Lightning Energy Zone')
+            pokemon.ability_used_turn = self.turn
+            pokemon.energy.append('lightning')
+            self.log.append(f'P{i} Magneton — Volt Charge: +1 lightning to {pokemon.card.name}')
+        elif effect == 'ice_maker':
+            if (own.energy_types != ('water',) or not own.active
+                    or own.active.card.element != 'water'):
+                raise RuleError('Ice Maker requires Active Water Pokémon and Water Energy Zone')
+            pokemon.ability_used_turn = self.turn
+            own.active.energy.append('water')
+            self.log.append(f'P{i} Baxcalibur — Ice Maker: +1 water to Active {own.active.card.name}')
+        else:
+            raise RuleError('No activatable ability handler for this Pokémon')
 
     def equip_tool(self, tool: Card, target: InPlay):
         i = self.current
@@ -286,7 +326,8 @@ class Battle:
         if (tool not in p.hand or tool.kind != 'tool' or
                 target not in p.all_in_play() or target.tool is not None):
             raise RuleError('Illegal Pokémon Tool attachment')
-        if tool.effect not in ('lucky_egg', 'deceptive_needle'):
+        if tool.effect not in ('lucky_egg', 'deceptive_needle',
+                               'giant_cape', 'eviolite', 'inflatable_boat'):
             raise UnsupportedEffect('Pokémon Tool effect has no handler')
         p.hand.remove(tool)
         target.tool = tool
@@ -316,6 +357,19 @@ class Battle:
                 p.hand.append(found)
             else:
                 p.deck.append(found)
+        elif card.effect == 'serenas_choice':
+            if not p.deck:
+                raise RuleError("Serena's Choice requires cards in deck")
+            p.hand.remove(card)
+            viewed = [p.deck.pop() for _ in range(min(3, len(p.deck)))]
+            # Choose from viewed cards only, without knowing future deck order.
+            priority = {'pokemon': 4, 'item': 3, 'supporter': 2, 'tool': 1}
+            chosen = max(viewed, key=lambda c: (priority.get(c.kind, 0), c.stage, c.hp))
+            viewed.remove(chosen)
+            p.hand.append(chosen)
+            p.deck.extend(viewed)
+            self.rng.shuffle(p.deck)
+            self.log.append(f"P{i} Serena's Choice: selects {chosen.name} from {len(viewed)+1} cards")
         elif card.effect == 'copycat':
             p.hand.remove(card)
             shuffled_count = len(p.hand)
@@ -343,7 +397,7 @@ class Battle:
                 raise RuleError('Repel requires opposing Basic Active and Bench')
             # The affected opponent chooses which Pokémon becomes Active.
             if target is None:
-                target = max(opp.bench, key=lambda x:(len(x.energy), x.card.hp-x.damage))
+                target = max(opp.bench, key=lambda x:(len(x.energy), x.max_hp-x.damage))
             if target not in opp.bench:
                 raise RuleError('Repel replacement must come from opponent Bench')
             p.hand.remove(card)
@@ -367,7 +421,7 @@ class Battle:
             if not candidates:
                 raise RuleError('No damaged benched Pokémon for Cyrus')
             if target is None:
-                target = max(candidates, key=lambda x:(x.damage, -(x.card.hp-x.damage)))
+                target = max(candidates, key=lambda x:(x.damage, -(x.max_hp-x.damage)))
             if target not in candidates:
                 raise RuleError('Cyrus target must be damaged and benched')
             p.hand.remove(card)
@@ -408,6 +462,8 @@ class Battle:
             p.hand.remove(card)
             owner = i if target in p.all_in_play() else 1-i
             self.log.append(f'P{i} Field Blower: removes {removed} from P{owner} {target.card.name}')
+            if target.damage >= target.max_hp:
+                self._damage_target(owner, target, 0, 1-owner, source=f'{removed} removed')
         else:
             raise UnsupportedEffect('Trainer effect requires handler')
         if card.kind == 'supporter':
@@ -420,7 +476,9 @@ class Battle:
         p = self.players[i]
         if p.retreated or not p.active or incoming not in p.bench or p.active.status == 'asleep':
             raise RuleError('Illegal retreat')
-        need = max(0, p.active.card.retreat - p.retreat_discount)
+        boat = bool(p.active.tool and p.active.tool.effect == 'inflatable_boat'
+                    and p.active.card.element == 'water')
+        need = max(0, p.active.card.retreat - p.retreat_discount - int(boat))
         if len(p.active.energy) < need:
             raise RuleError('Not enough energy to retreat')
         del p.active.energy[:need]
@@ -440,7 +498,7 @@ class Battle:
         required = Counter(x for x in attack.cost if x != 'colorless')
         return all(owned[t] >= n for t, n in required.items())
 
-    def attack(self, selected: Attack):
+    def attack(self, selected: Attack, target: InPlay | None = None):
         i = self.current
         self._require_action(i)
         me, them = self.players[i], self.players[1-i]
@@ -452,9 +510,28 @@ class Battle:
             raise RuleError('Attack energy cost unpaid')
         valid = ('', 'discard_2_global_random', 'heal_self_30', 'coin_bonus_30',
                  'bench_plus_30', 'snipe_20_bench', 'recoil_20',
-                 'discard_opponent_supporter', 'item_lock_next_turn', 'sleep_active')
+                 'discard_opponent_supporter', 'item_lock_next_turn', 'sleep_active',
+                 'both_benches_plus_20', 'fire_extra_2_plus_60', 'recoil_50',
+                 'water_snipe_130_discard')
         if selected.effect not in valid:
             raise UnsupportedEffect('Attack effect requires handler')
+        if selected.effect == 'water_snipe_130_discard':
+            if target is None:
+                target = min(them.all_in_play(), key=lambda x:(x.max_hp-x.damage, x.card.points))
+            if target not in them.all_in_play():
+                raise RuleError('Diving Icicles target must be an opposing Pokémon in play')
+            count = me.active.energy.count('water')
+            me.active.energy = [e for e in me.active.energy if e != 'water']
+            self.log.append(f'P{i} {me.active.card.name} Diving Icicles: discards {count} Water Energy')
+            amount = 130
+            if target is them.active and target.card.weakness == me.active.card.element:
+                amount += 20
+            # Damage to an attacker-selected Pokémon; Bench does not take Weakness.
+            self._damage_target(1-i, target, amount, i, source=f'P{i} Diving Icicles', attack_damage=True)
+            self.end_turn()
+            return
+        if target is not None:
+            raise RuleError('Explicit attack targets are only supported by Diving Icicles')
         damage = selected.damage
         if selected.effect == 'coin_bonus_30':
             heads = self.rng.choice((True, False))
@@ -463,8 +540,15 @@ class Battle:
                 damage += 30
         if selected.effect == 'bench_plus_30':
             damage += 30 * len(me.bench)
+        if selected.effect == 'both_benches_plus_20':
+            damage += 20 * (len(me.bench) + len(them.bench))
+        if selected.effect == 'fire_extra_2_plus_60':
+            # Blazing Beatdown needs two *additional* Fire on top of RR cost.
+            if Counter(me.active.energy)['fire'] >= 4:
+                damage += 60
         if damage > 0 and them.active.card.weakness == me.active.card.element:
             damage += 20
+        damage = self.attack_damage_after_tool(them.active, damage)
         them.active.damage += damage
         self.log.append(f'P{i} {me.active.card.name} uses {selected.name}, {damage} damage to P{1-i} Active {them.active.card.name}')
         if selected.effect == 'item_lock_next_turn':
@@ -495,12 +579,14 @@ class Battle:
         # from the same attack (including recoil and Bench damage) together;
         # stopping after a single first KO produced impossible survivors.
         if selected.effect == 'snipe_20_bench' and them.bench:
-            target = min(them.bench, key=lambda x: (x.card.hp-x.damage, x.card.hp))
-            target.damage += 20
-            self.log.append(f'Hoopa ex — Shadow Bullet: 20 damage to P{1-i} {target.card.name}')
-        if selected.effect == 'recoil_20':
-            me.active.damage += 20
-            self.log.append(f'P{i} Hoopa ex recoil: 20 damage')
+            target = min(them.bench, key=lambda x: (x.max_hp-x.damage, x.max_hp))
+            bench_damage = self.attack_damage_after_tool(target, 20)
+            target.damage += bench_damage
+            self.log.append(f'Hoopa ex — Shadow Bullet: {bench_damage} damage to P{1-i} {target.card.name}')
+        if selected.effect in ('recoil_20', 'recoil_50'):
+            recoil = 20 if selected.effect == 'recoil_20' else 50
+            me.active.damage += recoil
+            self.log.append(f'P{i} {me.active.card.name} recoil: {recoil} damage')
         self._resolve_attack_knockouts()
         self.end_turn()
 
@@ -512,8 +598,8 @@ class Battle:
         """
         # Collect before mutating the field so no KO is lost to early finish.
         knocked = {
-            idx: ([p.active] if p.active and p.active.damage >= p.active.card.hp else []) +
-                 [x for x in p.bench if x.damage >= x.card.hp]
+            idx: ([p.active] if p.active and p.active.damage >= p.active.max_hp else []) +
+                 [x for x in p.bench if x.damage >= x.max_hp]
             for idx, p in enumerate(self.players)
         }
         for victim, victims in knocked.items():
@@ -545,7 +631,7 @@ class Battle:
             return
         for idx, p in enumerate(self.players):
             if p.active is None and p.bench:
-                replacement = max(p.bench, key=lambda x: (len(x.energy), x.card.hp-x.damage))
+                replacement = max(p.bench, key=lambda x: (len(x.energy), x.max_hp-x.damage))
                 p.bench.remove(replacement)
                 p.active = replacement
                 self.log.append(f'P{idx} promotes {replacement.card.name}')
@@ -566,7 +652,7 @@ class Battle:
             self.winner, self.finished = scorer, True
         else:
             # Promotion is chosen by the rule agent; this default is deterministic.
-            replacement = max(p.bench, key=lambda x: (len(x.energy), x.card.hp-x.damage))
+            replacement = max(p.bench, key=lambda x: (len(x.energy), x.max_hp-x.damage))
             p.bench.remove(replacement)
             p.active = replacement
             self.log.append(f'P{victim} promotes {replacement.card.name}')
@@ -581,6 +667,13 @@ class Battle:
                 and p.active.tool and p.active.tool.effect == 'deceptive_needle'):
             self._damage_target(1-self.current, self.players[1-self.current].active,
                                 10, self.current, source='Deceptive Needle')
+        # Legendary Pulse draws one card only while its owner remains Active
+        # at the end of their turn. Respect the hand cap and game-over.
+        if not self.finished and p.active and p.active.card.ability == 'legendary_pulse':
+            before = len(p.hand)
+            self.draw(self.current, 1)
+            self.log.append(f'P{self.current} {p.active.card.name} — Legendary Pulse: '
+                            f'draws {len(p.hand)-before} card(s)')
         # Special Conditions check between turns. Asleep gets one coin flip per
         # active affected Pokémon, even on the turn it became Asleep.
         if not self.finished:
@@ -618,12 +711,20 @@ class RuleAgent:
         damage = attack.damage
         if attack.effect == 'bench_plus_30':
             damage += 30 * len(bench)
+        if attack.effect == 'both_benches_plus_20':
+            # Opponent Bench size isn't exposed to this utility; score is a
+            # conservative minimum, while actual damage is computed by Battle.
+            damage += 20 * len(bench)
+        if attack.effect == 'fire_extra_2_plus_60' and Counter(attacker.energy)['fire'] >= 4:
+            damage += 60
         if attack.effect == 'coin_bonus_30':
             damage += 15  # expected value of one fair 30-damage coin flip
         if damage > 0 and opponent.card.weakness == attacker.card.element:
             damage += 20
-        ko = damage >= opponent.card.hp - opponent.damage
+        ko = damage >= opponent.max_hp - opponent.damage
         score = float(damage + (160 + 30 * opponent.card.points if ko else 0))
+        if attack.effect == 'water_snipe_130_discard':
+            score += 100  # 130 targeted damage minus all Water Energy discarded
         if attack.effect == 'snipe_20_bench':
             score += 15  # extra damage to Bench, no weakness
         if attack.effect == 'heal_self_30':
@@ -636,9 +737,10 @@ class RuleAgent:
             score += 10
         if attack.effect == 'discard_2_global_random':
             score += 5  # may affect both sides; rough small value
-        if attack.effect == 'recoil_20':
-            score -= 20
-            if attacker.damage + 20 >= attacker.card.hp and not ko:
+        if attack.effect in ('recoil_20', 'recoil_50'):
+            recoil = 20 if attack.effect == 'recoil_20' else 50
+            score -= recoil
+            if attacker.damage + recoil >= attacker.max_hp and not ko:
                 score -= 250  # avoid self-KO unless it also secures a KO
         return score
 
@@ -661,7 +763,8 @@ class RuleAgent:
             if not pending:
                 continue
             # Damage comes first; Active wins a tie to reduce unnecessary stall.
-            strongest = max(a.damage + 30 * (a.effect == 'bench_plus_30') for a in pending)
+            strongest = max(a.damage + 30 * (a.effect == 'bench_plus_30')
+                            + 105 * (a.effect == 'water_snipe_130_discard') for a in pending)
             score = (strongest, pokemon is player.active, pokemon.card.stage,
                      -len(pokemon.energy))
             preferred.append((score, pokemon))
@@ -708,19 +811,30 @@ class RuleAgent:
                     p.turns_taken > 1 and target.entered_at != battle.turn and target.evolved_at != battle.turn):
                     battle.evolve(target,evo)
                     break
-        # Use Water Shuriken from either Active or Bench; prefer a knockout.
+        # Activated abilities: energy acceleration and Water Shuriken.
         for pokemon in list(p.all_in_play()):
-            if pokemon.card.ability == 'water_shuriken' and pokemon.ability_used_turn != battle.turn:
+            if pokemon.ability_used_turn == battle.turn:
+                continue
+            if pokemon.card.ability == 'water_shuriken':
                 enemy = battle.players[1-i]
                 targets = enemy.all_in_play()
                 if targets:
-                    victim = min(targets, key=lambda x: x.card.hp - x.damage)
+                    victim = min(targets, key=lambda x: x.max_hp - x.damage)
                     battle.use_ability(pokemon, victim)
                     if battle.finished:
                         battle.end_turn()
                         return
+            elif (pokemon.card.ability == 'volt_charge' and p.energy_types == ('lightning',)):
+                battle.use_ability(pokemon)
+            elif (pokemon.card.ability == 'ice_maker' and p.energy_types == ('water',)
+                  and p.active and p.active.card.element == 'water'):
+                battle.use_ability(pokemon)
         for c in list(p.hand):
             if c.effect == 'research' and len(p.hand) <= 8 and p.deck:
+                battle.play_trainer(c)
+                break
+        for c in list(p.hand):
+            if c.effect == 'serenas_choice' and not p.supporter_used and p.deck:
                 battle.play_trainer(c)
                 break
         # A conservative baseline for other supported Supporters and healing items.

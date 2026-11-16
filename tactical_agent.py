@@ -50,7 +50,7 @@ class TacticalAgent(RuleAgent):
         """
         options = []
         for mon in player.all_in_play():
-            if mon.damage >= mon.card.hp:
+            if mon.damage >= mon.max_hp:
                 continue
             moves = self._prospective_attacks(mon, player)
             for attack, evo_steps in moves:
@@ -66,6 +66,8 @@ class TacticalAgent(RuleAgent):
                     expected_damage += 30 * min(3, len(player.bench))
                 if attack.effect == 'coin_bonus_30':
                     expected_damage += 15
+                if attack.effect == 'water_snipe_130_discard':
+                    expected_damage += 105
                 if attack.effect == 'snipe_20_bench':
                     expected_damage += 18
                 if attack.effect == 'recoil_20':
@@ -78,7 +80,7 @@ class TacticalAgent(RuleAgent):
                          + 7 * int(attack.effect == 'discard_opponent_supporter')
                          + 8 * int(mon.card.ability == 'nightmare_aura'))
                 # Do not invest heavily into a damaged fragile Pokemon.
-                if mon.card.hp - mon.damage <= 30:
+                if mon.max_hp - mon.damage <= 30:
                     score -= 35
                 options.append((score, mon, attack.name))
         if not options:
@@ -91,7 +93,7 @@ class TacticalAgent(RuleAgent):
     def attack_utility(attacker: InPlay, opponent: InPlay, bench: list[InPlay],
                        attack: Attack) -> float:
         score = RuleAgent.attack_utility(attacker, opponent, bench, attack)
-        remaining = opponent.card.hp - opponent.damage
+        remaining = opponent.max_hp - opponent.damage
         predicted = attack.damage + (30 * len(bench) if attack.effect == 'bench_plus_30' else 0)
         if predicted > 0 and opponent.card.weakness == attacker.card.element:
             predicted += 20
@@ -101,8 +103,10 @@ class TacticalAgent(RuleAgent):
             score += 10
         # Avoid a needless self-KO: scoring may secure 3 points, but that is
         # treated as a special case (simultaneous KOs are handled by the engine).
-        if attack.effect == 'recoil_20' and attacker.damage + 20 >= attacker.card.hp:
-            score -= 150 if predicted >= remaining else 320
+        if attack.effect in ('recoil_20', 'recoil_50'):
+            recoil = 20 if attack.effect == 'recoil_20' else 50
+            if attacker.damage + recoil >= attacker.max_hp:
+                score -= 150 if predicted >= remaining else 320
         return score
 
     def _choose_cyrus_target(self, battle: Battle) -> InPlay | None:
@@ -129,7 +133,9 @@ class TacticalAgent(RuleAgent):
         p = battle.players[battle.current]
         if not p.active or p.active.status == 'asleep' or p.retreated or not p.bench:
             return None
-        if len(p.active.energy) + p.retreat_discount < p.active.card.retreat:
+        boat = int(bool(p.active.tool and p.active.tool.effect == 'inflatable_boat'
+                        and p.active.card.element == 'water'))
+        if len(p.active.energy) + p.retreat_discount + boat < p.active.card.retreat:
             return None
         foe = battle.players[1-battle.current].active
         if not foe:
@@ -171,11 +177,17 @@ class TacticalAgent(RuleAgent):
                     target = p.active
                 else:
                     target = next((x for x in p.bench if x.card.element == 'darkness' and not x.tool), None)
-            elif card.effect == 'lucky_egg':
-                if p.active and not p.active.tool:
+            elif card.effect in ('lucky_egg', 'giant_cape', 'eviolite'):
+                if p.active and not p.active.tool and (card.effect != 'eviolite' or p.active.card.stage == 0):
                     target = p.active
                 else:
-                    target = next((x for x in p.bench if not x.tool), None)
+                    target = next((x for x in p.bench if not x.tool and
+                                   (card.effect != 'eviolite' or x.card.stage == 0)), None)
+            elif card.effect == 'inflatable_boat':
+                if p.active and p.active.card.element == 'water' and not p.active.tool:
+                    target = p.active
+                else:
+                    target = next((x for x in p.bench if x.card.element == 'water' and not x.tool), None)
             if target:
                 battle.equip_tool(card, target)
 
@@ -200,14 +212,21 @@ class TacticalAgent(RuleAgent):
                     break
 
         for mon in list(p.all_in_play()):
-            if mon.card.ability == 'water_shuriken' and mon.ability_used_turn != battle.turn:
+            if mon.ability_used_turn == battle.turn:
+                continue
+            if mon.card.ability == 'water_shuriken':
                 choices = foe.all_in_play()
                 if choices:
-                    victim = min(choices, key=lambda x: (x.card.hp-x.damage, x.card.points))
+                    victim = min(choices, key=lambda x: (x.max_hp-x.damage, x.card.points))
                     battle.use_ability(mon, victim)
                     if battle.finished:
                         battle.end_turn()
                         return
+            elif mon.card.ability == 'volt_charge' and p.energy_types == ('lightning',):
+                battle.use_ability(mon)
+            elif (mon.card.ability == 'ice_maker' and p.energy_types == ('water',)
+                  and p.active and p.active.card.element == 'water'):
+                battle.use_ability(mon)
 
         # Draw support first if the hand is shallow; a preserved Cyrus can turn
         # an otherwise weak attack into an immediate KO after energy attachment.
@@ -234,6 +253,10 @@ class TacticalAgent(RuleAgent):
                 if target:
                     battle.play_trainer(card, target=target)
                     break
+        for card in list(p.hand):
+            if card.effect == 'serenas_choice' and not p.supporter_used and p.deck:
+                battle.play_trainer(card)
+                break
         for card in list(p.hand):
             if card.effect == 'copycat' and not p.supporter_used and p.deck:
                 if len(foe.hand) >= len(p.hand) + 2:

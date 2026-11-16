@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.2: mobile-first design refresh with unchanged tactical motor."""
+"""TCG Pocket Lab v0.9.3: audited new card effects + one-deck-versus-meta gauntlet."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -12,6 +12,7 @@ from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_
 from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
 from card_support import build_support_index, coverage_summary
+from meta_gauntlet import build_gauntlet_plan, run_meta_gauntlet, MAX_GAMES_PER_OPPONENT
 from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
@@ -83,7 +84,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.9.2','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.9.3','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     """Validate and stage import; apply it on the next Streamlit script run.
@@ -262,7 +263,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.9.2)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.9.3)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -289,7 +290,7 @@ with lab_tab:
     st.caption('Os resultados são experimentais: a IA e o motor ainda não reproduzem todas as regras do jogo.')
     with st.expander(f'📚 Biblioteca de decks — {len(DECKS)} listas de 20 cartas', expanded=False):
         st.caption('Escolha uma lista pronta e importe para Meu deck. '
-                   'As cinco listas novas ainda não estão liberadas para simulação automática.')
+                   'Decks novos são liberados somente após a verificação completa de seus efeitos.')
         my_preset_slug = st.selectbox('Escolha o deck para importar', list(DECKS),
                                      format_func=lambda slug: DECKS[slug]['name'],
                                      key='preset_player_v092')
@@ -668,27 +669,115 @@ with lab_tab:
         st.info('Importe ou selecione um deck adversário para iniciar o diagnóstico.')
 
     st.divider()
-    st.subheader('Planejamento contra o meta')
-    st.caption('Sete listas de 20 cartas cadastradas; apenas os efeitos reconhecidos pelo motor '
-               'podem participar de duelos técnicos. Nenhum confronto está validado competitivamente.')
-    opponents=st.multiselect('Adversários do meta',META,default=META)
-    games=st.number_input('Partidas planejadas por confronto',min_value=1,
-                           max_value=1_000_000,value=100_000,step=10_000)
-    seed=st.number_input('Semente do planejamento',min_value=0,value=20261116)
-    st.metric('Partidas planejadas (não executadas)',
-              f'{len(opponents)*int(games):,}'.replace(',','.'))
-    if opponents:
-        plan=make_experiment('meu_deck.json',opponents,int(games),int(seed))
-        plan['player_deck']=payload()
-        st.download_button('⬇️ Exportar plano',
-                           json.dumps(plan,ensure_ascii=False,indent=2),
-                           file_name='experimento.json')
-    st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
+    st.markdown(section('Meu deck × Todo o meta',
+        'Compare sua lista com todos os arquétipos cadastrados em uma única execução, '
+        'sem simular cartas cujo efeito ainda esteja pendente.',
+        'GAUNTLET · EXPERIMENTAL'), unsafe_allow_html=True)
+    st.caption('As taxas exibidas refletem somente duelos técnicos executados com IA heurística. '
+               'Adversários incompatíveis são identificados e excluídos dos percentuais.')
+    chosen_gauntlet = st.multiselect('Decks do meta a enfrentar', options=list(DECKS),
+        default=list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
+        key='gauntlet_field_v093')
+    include_mirror = st.checkbox('Incluir confronto espelhado (se houver)',
+        value=False, key='gauntlet_mirror_v093')
+    gauntlet_games = st.select_slider('Partidas por adversário compatível',
+        options=[25,50,100,250], value=100, key='gauntlet_games_v093')
+    gauntlet_seed = st.number_input('Semente da série', min_value=0, max_value=2_000_000_000,
+        value=20261116, step=1, key='gauntlet_seed_v093')
+    gauntlet_player = payload()
+    gauntlet_request = {
+        'player': gauntlet_player, 'field': list(chosen_gauntlet),
+        'mirror': bool(include_mirror), 'games': int(gauntlet_games),
+        'seed': int(gauntlet_seed), 'agent_mode': agent_mode,
+    }
+    gauntlet_data = None
+    gauntlet_plan = None
+    if chosen_gauntlet:
+        try:
+            gauntlet_data = fetch_gameplay_catalog()
+            gauntlet_field = {slug:get_preset(slug) for slug in chosen_gauntlet}
+            gauntlet_plan = build_gauntlet_plan(
+                gauntlet_player, gauntlet_field, cards, gauntlet_data,
+                include_mirror=include_mirror)
+            leftc,midc,rightc = st.columns(3, gap='small')
+            leftc.metric('Compatíveis', gauntlet_plan['ready'])
+            midc.metric('Pendentes', gauntlet_plan['blocked'])
+            rightc.metric('Espelhados ignorados', gauntlet_plan['mirrors_skipped'])
+            st.dataframe([{
+                'Adversário': row['name'],
+                'Situação': {'ready':'✅ Simulável','blocked':'🛠️ Pendente',
+                             'mirror':'🔁 Espelhado'}.get(row['status'], row['status']),
+                'Cartas suportadas': f"{row['supported']}/{row['total']}",
+                'Motivo': '; '.join(row['reasons'][:2]) if row['status']=='blocked'
+                          else ('Confronto idêntico' if row['status']=='mirror' else 'Pronto para teste'),
+            } for row in gauntlet_plan['opponents']], use_container_width=True,
+                         hide_index=True)
+            with st.expander('Detalhes das cartas e mecânicas pendentes'):
+                for row in gauntlet_plan['opponents']:
+                    if row['reasons']:
+                        st.markdown(f"**{row['name']}**")
+                        for reason in row['reasons'][:6]:
+                            st.write('• ' + reason)
+            st.caption(f"Execução prevista: {gauntlet_plan['ready'] * int(gauntlet_games)} partidas "
+                       f"auditadas em {gauntlet_plan['ready']} confronto(s).")
+        except (requests.RequestException, ValueError, TypeError, KeyError, RuleError) as exc:
+            st.error(f'Falha na verificação do meta: {exc}')
+    else:
+        st.info('Escolha pelo menos um deck adversário para montar a série.')
+    can_run_gauntlet = bool(gauntlet_plan and gauntlet_plan['ready'] > 0)
+    if st.button('⚔️ Simular meu deck contra o meta', use_container_width=True,
+                 disabled=not can_run_gauntlet, key='run_gauntlet_v093'):
+        bar = st.progress(0, text='Preparando confrontos auditados…')
+        try:
+            count = gauntlet_plan['ready'] * int(gauntlet_games)
+            def update_gauntlet(done, expected):
+                if expected:
+                    bar.progress(min(1.0, done/expected),
+                                 text=f'{done}/{expected} partidas técnicas')
+            output = run_meta_gauntlet(
+                gauntlet_player, gauntlet_field, cards, gauntlet_data,
+                games_per_opponent=int(gauntlet_games), seed=int(gauntlet_seed),
+                agent_mode=agent_mode, include_mirror=bool(include_mirror),
+                progress=update_gauntlet)
+            st.session_state['gauntlet_report_v093'] = {
+                'request': gauntlet_request, 'report': output}
+            bar.progress(1.0, text=f'{output["completed"]}/{count} concluídas')
+        except (RuleError, UnsupportedEffect, ValueError, IndexError, TypeError) as exc:
+            st.error(f'Série técnica interrompida: {exc}')
+    saved_gauntlet = st.session_state.get('gauntlet_report_v093')
+    if saved_gauntlet and saved_gauntlet['request'] == gauntlet_request:
+        gauntlet_report = saved_gauntlet['report']
+        st.markdown('#### Resultado por adversário')
+        st.dataframe([{
+            'Adversário': row['name'],
+            'Estado': {'completed':'✅ Concluído','partial':'⚠️ Parcial',
+                       'blocked':'🛠️ Bloqueado','mirror':'🔁 Espelhado',
+                       'error':'❌ Erro'}.get(row['status'], row['status']),
+            'Vitórias': row['outcomes']['left'] if row['outcomes'] else None,
+            'Derrotas': row['outcomes']['right'] if row['outcomes'] else None,
+            'Empates': row['outcomes']['draw'] if row['outcomes'] else None,
+            'Vitórias (%)': row['win_rate'],
+            'Partidas': row['completed'],
+        } for row in gauntlet_report['results']], use_container_width=True, hide_index=True)
+        g1,g2 = st.columns(2, gap='small')
+        g1.metric('Partidas técnicas concluídas', gauntlet_report['completed'])
+        g2.metric('Falhas', gauntlet_report['failed'])
+        if gauntlet_report['overall_win_rate'] is not None:
+            st.metric('Vitórias nos confrontos executados',
+                      f'{gauntlet_report["overall_win_rate"]:.1f}%')
+        st.caption(gauntlet_report['overall_rate_note'])
+        st.download_button('⬇️ Baixar relatório completo da série (JSON)',
+            data=json.dumps(gauntlet_report, ensure_ascii=False, indent=2),
+            file_name='meu_deck_vs_meta_v093.json', mime='application/json',
+            use_container_width=True, key='download_gauntlet_v093')
+    elif saved_gauntlet:
+        st.info('A configuração mudou desde o último teste. Execute novamente para atualizar os resultados.')
+
 with motor_tab:
-    st.subheader('Motor de regras v0.9.2 — fase de expansão')
+    st.subheader('Motor de regras v0.9.3 — expansão incremental')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
-    st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
+    st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
     st.warning('Ainda não são universais: condições especiais além de Sono, ferramentas/efeitos fora destes presets, estádios, zona multicolorida, estratégia avançada e validação independente de fidelidade. Nocautes simultâneos de ataques agora são resolvidos em grupo e testados. Não trate os lotes técnicos como win rates reais.')
     st.divider()
     st.subheader('Auditoria do catálogo')

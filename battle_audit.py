@@ -1,4 +1,4 @@
-"""State validation and reproducible traces for TCG Pocket Lab v0.8.3.
+"""State validation and reproducible traces for TCG Pocket Lab v0.8.3.1.
 
 These checks test internal consistency. They are NOT a certification that the
 rules match Pokemon TCG Pocket or that a strategic policy is competitive.
@@ -47,7 +47,7 @@ def inspect_state(game: Battle) -> list[str]:
                 issues.append(f'P{i} invalid Pokemon in play')
             if pokemon.damage < 0:
                 issues.append(f'P{i} negative damage on {pokemon.card.name}')
-            if pokemon.damage >= pokemon.card.hp:
+            if pokemon.damage >= pokemon.max_hp:
                 issues.append(f'P{i} KO Pokemon remained in play: {pokemon.card.name}')
             if pokemon.card.stage not in (0,1,2):
                 issues.append(f'P{i} invalid stage on {pokemon.card.name}')
@@ -82,8 +82,8 @@ def snapshot(game: Battle, action: str) -> dict:
             return None
         return {
             'id': p.card.id, 'name': p.card.name,
-            'max_hp': p.card.hp, 'damage': p.damage,
-            'hp_remaining': p.card.hp - p.damage,
+            'max_hp': p.max_hp, 'damage': p.damage,
+            'hp_remaining': p.max_hp - p.damage,
             'energy': list(p.energy), 'status': p.status,
             'tool': p.tool.name if p.tool else None,
             'entered_at': p.entered_at, 'evolved_at': p.evolved_at,
@@ -109,7 +109,17 @@ class AuditedBattle(Battle):
     )
 
     def __init__(self, *args, collect_trace=False, **kwargs):
-        super().__init__(*args, **kwargs)
+        try:
+            super().__init__(*args, **kwargs)
+        except TypeError as exc:
+            # The 0.8.3 deployment exposed a raw TypeError here when an older
+            # battle_engine module was imported alongside the new batch runner.
+            raise RuleError(
+                'Erro de compatibilidade na inicialização da partida. '
+                'Verifique se battle_engine.py está atualizado; reinicie o '
+                'app no Streamlit Cloud. Causa: '
+                f'{type(exc).__name__}: {exc}'
+            ) from exc
         self.trace = [] if collect_trace else None
         self.checked_actions = 0
         self._audit_action('setup')

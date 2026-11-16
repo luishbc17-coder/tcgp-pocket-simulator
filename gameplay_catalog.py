@@ -105,6 +105,9 @@ def _is_one_of(source, *references):
 # Explicit reference transcriptions of the PocketDecks v5 English game text.
 # Multiple entries are accepted only where the wording is mechanically identical.
 TRAINER_EFFECTS = {
+    "Serena's Choice": ('serenas_choice', (
+        'Look at the top 3 cards of your deck and put 1 of them into your hand. Shuffle back into your deck.',
+    )),
     "Professor's Research": ('research', (
         'Draw 2 cards.',
     )),
@@ -172,6 +175,10 @@ def _recognize_attack(r: dict, raw_attack: dict):
     if (r['name'] == 'Swablu' and name == 'Sing' and cost == ('colorless',)
             and damage in (None, 0) and _same_text(effect, "Your opponent's Active Pokémon is now Asleep.")):
         return Attack(name, cost, 0, 'sleep_active')
+    if (r['name'] == 'Chien-Pao ex' and name == 'Diving Icicles'
+        and damage is None and cost == ('water', 'water', 'water')
+        and _same_text(effect, "Discard all [W] Energy from this Pokémon. This attack does 130 damage to 1 of your opponent's Pokémon.")):
+        return Attack(name, cost, 0, 'water_snipe_130_discard')
     if type(damage) is not int or damage < 0:
         raise UnsupportedEffect(f'{r["name"]} / {name}: dano dinâmico ou desconhecido')
     if not effect:
@@ -180,6 +187,20 @@ def _recognize_attack(r: dict, raw_attack: dict):
         return Attack(name, cost, damage, 'heal_self_30')
     if _same_text(effect, 'Flip a coin. If heads, this attack does 30 more damage.'):
         return Attack(name, cost, damage, 'coin_bonus_30')
+    if (r['name'] == 'Suicune ex' and name == 'Crystal Waltz'
+        and damage == 20 and cost == ('water','water')
+        and _same_text(effect, "This attack does 20 damage for each Benched Pokémon (both yours and your opponent's).")):
+        return Attack(name, cost, damage, 'both_benches_plus_20')
+    if (r['name'] == 'Entei ex' and name == 'Blazing Beatdown'
+        and damage == 60 and cost == ('fire','fire')
+        and _is_one_of(effect,
+            'If this Pokémon has at least 2 extra [R] Energy attached, this attack does 60 more damage.',
+            'If this Pokémon has at least 2 extra Fire Energy attached, this attack does 60 more damage.')):
+        return Attack(name, cost, damage, 'fire_extra_2_plus_60')
+    if (r['name'] == 'Mega Charizard Y ex' and name == 'Crimson Dive'
+        and damage == 250 and cost == ('fire','fire','fire','colorless')
+        and _same_text(effect, 'This Pokémon also does 50 damage to itself.')):
+        return Attack(name, cost, damage, 'recoil_50')
     if (r['name'] == 'Mega Altaria ex' and name == 'Mega Harmony'
         and damage == 40 and cost == ('psychic','psychic')
         and _same_text(effect, 'This attack does 30 more damage for each of your Benched Pokémon.')):
@@ -212,6 +233,24 @@ def _recognize_ability(r: dict) -> str:
         return ''
     name = data.get('name')
     effect = data.get('effect')
+    if (name == 'Legendary Pulse' and r['name'] in ('Entei ex', 'Suicune ex', 'Raikou ex')
+        and _same_text(effect, 'At the end of your turn, if this Pokémon is in the Active Spot, draw a card.')):
+        return 'legendary_pulse'
+    if (r['name'] == 'Baxcalibur' and name == 'Ice Maker'
+        and _is_one_of(effect,
+            'Once during your turn, you may take a [W] Energy from your Energy Zone and attach it to the [W] Pokémon in the Active Spot.',
+            'Once during your turn, you may take a Water Energy from your Energy Zone and attach it to the Water Pokémon in the Active Spot.')):
+        return 'ice_maker'
+    if (r['name'] == 'Magneton' and name == 'Volt Charge'
+        and _is_one_of(effect,
+            'Once during your turn, you may take a [L] Energy from your Energy Zone and attach it to this Pokémon.',
+            'Once during your turn, you may take a Lightning Energy from your Energy Zone and attach it to this Pokémon.')):
+        return 'volt_charge'
+    if (r['name'] == 'Charmeleon' and name == 'Ignition'
+        and _is_one_of(effect,
+            'Once during your turn, when you play this Pokémon from your hand to evolve 1 of your Pokémon, you may take a [R] Energy from your Energy Zone and attach it to your Active [R] Pokémon.',
+            'Once during your turn, when you play this Pokémon from your hand to evolve 1 of your Pokémon, you may take a Fire Energy from your Energy Zone and attach it to your Active Fire Pokémon.')):
+        return 'ignition'
     if (r['name'] == 'Greninja' and name == 'Water Shuriken'
         and _same_text(effect, "Once during your turn, you may do 20 damage to 1 of your opponent's Pokémon.")):
         return 'water_shuriken'
@@ -245,6 +284,16 @@ def compile_card(raw: dict) -> Card:
             if (raw['name'] == 'Deceptive Needle' and _same_text(detail,
                 "at the end of your turn, if the [ d ] pokémon this card is attached to is in the active spot, do 10 damage to your opponent's active pokémon")):
                 return Card(raw['id'],raw['name'],kind,effect='deceptive_needle')
+            if (raw['name'] == 'Giant Cape' and _same_text(detail,
+                    'The Pokémon this card is attached to gets +20 HP.')):
+                return Card(raw['id'],raw['name'],kind,effect='giant_cape')
+            if (raw['name'] == 'Eviolite' and _same_text(detail,
+                    "The Basic Pokémon this card is attached to takes −20 damage from attacks from your opponent's Pokémon.")):
+                return Card(raw['id'],raw['name'],kind,effect='eviolite')
+            if (raw['name'] == 'Inflatable Boat' and _is_one_of(detail,
+                    'The Retreat Cost of the [ W ] Pokémon this card is attached to is 1 less.',
+                    'The Retreat Cost of the {W} Pokémon this card is attached to is 1 less.')):
+                return Card(raw['id'],raw['name'],kind,effect='inflatable_boat')
             raise UnsupportedEffect(f'{raw["name"]}: efeito de ferramenta ainda não implementado')
         return Card(raw['id'], raw['name'], kind, effect=_recognize_trainer(raw))
     if raw.get('type') != 'Pokémon':
