@@ -761,9 +761,9 @@ class RuleAgent:
 
 
 def play_fixture_match(left, right, seed=0, energy_left=('water',), energy_right=('water',),
-                       line_map=None, force_first=None, battle_cls=Battle):
+                       line_map=None, force_first=None, battle_cls=Battle, agent_cls=None):
     battle = battle_cls(left, right, energy_left, energy_right, seed, force_first=force_first)
-    agent = RuleAgent(line_map)
+    agent = (agent_cls or RuleAgent)(line_map)
     while not battle.finished:
         agent.play_turn(battle)
     return battle

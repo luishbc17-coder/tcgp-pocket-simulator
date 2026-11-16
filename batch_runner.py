@@ -1,4 +1,4 @@
-"""Bounded, replayable technical matchup runs for TCG Pocket Lab v0.8.4.
+"""Bounded, replayable technical matchup runs for TCG Pocket Lab v0.9.
 
 Never present these results as verified metagame probabilities: the v0.8.x
 agent is heuristic and this engine does not model all real-game interactions.
@@ -12,6 +12,8 @@ import battle_engine
 from battle_engine import Battle, Card, RuleAgent, RuleError, UnsupportedEffect, validate_deck
 from battle_audit import AuditedBattle, StateInvariantError, snapshot
 from deck_identity import describe_compiled, compare_decks
+from tactical_agent import TacticalAgent
+from battle_metrics import count_logged_actions, merge_telemetry, new_telemetry, serialize_telemetry, duration_distribution
 
 MAX_BATCH_GAMES = 1_000
 
@@ -43,7 +45,8 @@ def run_technical_batch(left: list[Card], right: list[Card],
                         progress: Callable[[int, int], None] | None = None,
                         keep_replay: bool = True,
                         left_payload: dict | None = None,
-                        right_payload: dict | None = None) -> dict:
+                        right_payload: dict | None = None,
+                        agent_mode: str = 'baseline') -> dict:
     """Fair, deterministic experiment: two seating orders and first-player balance.
 
     The unaltered original decks are always 'left' and 'right'; if a round
@@ -54,6 +57,8 @@ def run_technical_batch(left: list[Card], right: list[Card],
         raise ValueError(f'games must be 1..{MAX_BATCH_GAMES}')
     if type(seed) is not int or seed < 0:
         raise ValueError('seed must be a nonnegative integer')
+    if agent_mode not in ('baseline', 'tactical'):
+        raise ValueError('agent_mode must be baseline or tactical')
     verify_engine_compatibility()
     left_e, right_e = tuple(energy_left), tuple(energy_right)
     validate_deck(left, left_e)
@@ -73,7 +78,8 @@ def run_technical_batch(left: list[Card], right: list[Card],
     total_actions = 0
     total_turns = 0
     replay = None
-    agent = RuleAgent(line_map or {})
+    agent = (TacticalAgent if agent_mode == 'tactical' else RuleAgent)(line_map or {})
+    telemetry = new_telemetry()
     start_time = monotonic()
     for idx in range(games):
         reverse = (idx // 2) % 2 == 1
@@ -107,9 +113,11 @@ def run_technical_batch(left: list[Card], right: list[Card],
             })
             total_actions += battle.checked_actions
             total_turns += battle.turn
+            merge_telemetry(telemetry, count_logged_actions(battle.log), reverse)
             if keep_replay and idx == 0:
                 replay = {
                     'seed': seed, 'round': idx + 1, 'winner': battle.winner,
+                    'agent_mode': agent_mode,
                     'first_player': battle.first, 'turns': battle.turn,
                     'events': list(battle.log), 'snapshots': battle.trace,
                     'energy_p0': list(ea), 'energy_p1': list(eb),
@@ -135,7 +143,8 @@ def run_technical_batch(left: list[Card], right: list[Card],
     attempted = valid + len(errors)
     return {
         'kind': 'technical_prototype_batch',
-        'version': '0.8.4',
+        'version': '0.9.0',
+        'agent_mode': agent_mode,
         'decks': {'left': left_identity, 'right': right_identity},
         'matchup': matchup,
         'rounds': rounds,
@@ -153,6 +162,44 @@ def run_technical_batch(left: list[Card], right: list[Card],
             for k in ('left_as_p0','left_as_p1')},
         'average_half_turns': round(total_turns / valid, 3) if valid else None,
         'checked_actions': total_actions,
+        'telemetry': serialize_telemetry(telemetry),
+        'duration_distribution': duration_distribution(rounds),
         'seed': seed, 'errors': errors, 'sample_replay': replay,
         'elapsed_seconds': round(monotonic()-start_time, 3),
+    }
+
+
+def compare_policies(left: list[Card], right: list[Card],
+                     energy_left=('psychic',), energy_right=('darkness',),
+                     line_map: dict[str,str] | None = None,
+                     games: int = 100, seed: int = 20261116,
+                     left_payload: dict | None = None,
+                     right_payload: dict | None = None) -> dict:
+    """A/B diagnostic on the same deck lists and initial seeds, NOT a causal test.
+
+    Both opponents use the same policy within each run; AI moves alter the
+    subsequent RNG consumption, so trajectories are *not* matched outcomes.
+    Compare telemetry and failure counts, never treat outcome deltas as skill.
+    """
+    opts = dict(energy_left=energy_left, energy_right=energy_right,
+                line_map=line_map, games=games, seed=seed,
+                left_payload=left_payload, right_payload=right_payload,
+                keep_replay=False)
+    baseline = run_technical_batch(left, right, agent_mode='baseline', **opts)
+    tactical = run_technical_batch(left, right, agent_mode='tactical', **opts)
+    return {
+        'kind': 'technical_policy_comparison', 'version': '0.9.0',
+        'validated_competitive': False,
+        'disclaimer': ('Comparação de comportamento, não medição causal de força: '
+                       'as jogadas alteram a trajetória aleatória subsequente.'),
+        'games_per_policy': games, 'seed': seed,
+        'decks': baseline['decks'], 'matchup': baseline['matchup'],
+        'policies': {
+            mode: {
+                'completed': r['completed'], 'failed': r['failed'],
+                'outcomes': r['outcomes'], 'average_half_turns': r['average_half_turns'],
+                'telemetry': r['telemetry'], 'duration_distribution':r['duration_distribution'],
+                'errors':r['errors'],
+            } for mode,r in [('baseline',baseline),('tactical',tactical)]
+        },
     }
