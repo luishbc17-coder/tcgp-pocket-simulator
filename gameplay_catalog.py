@@ -138,6 +138,12 @@ TRAINER_EFFECTS = {
     'Field Blower': ('field_blower', (
         "Discard a Pokémon Tool card from a Pokémon (yours or your opponent's) , or discard a Stadium card in play.",
     )),
+    'Wally': ('wally_colorless', (
+        'Take a [ C ] Energy from your Energy Zone and attach it to 1 of your Stage 2 Pokémon.',
+    )),
+    'Professor Turo': ('professor_turo', (
+        'Shuffle 1 of your Future Pokémon in play into your deck.',
+    )),
     'Flame Patch': ('flame_patch', (
         'Attach a [ R ] Energy from your discard pile to your Active [ R ] Pokémon.',
     )),
@@ -400,10 +406,14 @@ def compile_card(raw: dict) -> Card:
     retreat = raw.get('retreat')
     if type(retreat) is not int or retreat < 0:
         raise UnsupportedEffect(f'{raw["name"]}: recuo inválido')
+    raw_tags = raw.get('special_tags') or []
+    if not isinstance(raw_tags, (tuple, list)) or any(not isinstance(tag, str) for tag in raw_tags):
+        raise UnsupportedEffect(f"{raw['name']}: marcadores especiais inválidos")
+    tags = tuple(tag.casefold() for tag in raw_tags)
     return Card(raw['id'],raw['name'],'pokemon',stage_map[raw['stage']],
                 raw.get('evolves_from') or '',hp,points,
                 element,str(raw.get('weakness') or '').casefold(),retreat,
-                tuple(out), ability=ability_handler)
+                tuple(out), ability=ability_handler, tags=tags)
 
 
 def compile_deck(counts: dict[str,int], gameplay: list[dict]) -> tuple[list[Card], list[str]]:

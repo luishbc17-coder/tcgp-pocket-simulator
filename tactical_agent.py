@@ -251,6 +251,22 @@ class TacticalAgent(RuleAgent):
 
         # Draw support first if the hand is shallow; a preserved Cyrus can turn
         # an otherwise weak attack into an immediate KO after energy attachment.
+        # Supporters with specific eligibility: only spend them when useful.
+        # Wally accelerates Stage 2 Pokémon with genuine Colorless Energy.
+        if not p.supporter_used:
+            wally = next((c for c in p.hand if c.effect == 'wally_colorless'), None)
+            stage2 = [mon for mon in p.all_in_play() if mon.card.stage == 2]
+            if wally and stage2:
+                target = max(stage2, key=lambda mon:(mon is p.active, -len(mon.energy)))
+                battle.play_trainer(wally, target=target)
+        # Turo recycles a badly damaged Future Pokémon (no points awarded).
+        if not p.supporter_used:
+            turo = next((c for c in p.hand if c.effect == 'professor_turo'), None)
+            candidates = [mon for mon in p.bench if 'future' in mon.card.tags
+                          and mon.damage >= max(30, mon.max_hp // 2)]
+            if turo and candidates:
+                target = max(candidates,key=lambda mon:(mon.damage / mon.max_hp, -len(mon.energy)))
+                battle.play_trainer(turo, target=target)
         for card in list(p.hand):
             if card.effect == 'research' and not p.supporter_used and len(p.hand) <= 5 and p.deck:
                 battle.play_trainer(card)

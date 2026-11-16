@@ -53,6 +53,7 @@ class Card:
     attacks: tuple[Attack, ...] = ()
     effect: str = ''  # exact recognized trainer effect
     ability: str = '' # exact recognized ability handler
+    tags: tuple[str, ...] = ()  # source special_tags, including 'future'
 
 
 @dataclass
@@ -66,6 +67,7 @@ class InPlay:
     tool: Card | None = None
     status: str = ''  # only Asleep currently implemented
     mirror_shot_pending: bool = False  # next turn: coin on attack attempt
+    pre_evolutions: list[Card] = field(default_factory=list)  # card stack for Turo
 
     @property
     def max_hp(self) -> int:
@@ -228,6 +230,7 @@ class Battle:
         old_name = target.card.name
         old_spot = 'Ativo' if target is p.active else 'Banco'
         p.hand.remove(evolution)
+        target.pre_evolutions.append(target.card)
         target.card = evolution
         target.status = ''  # Evolving removes Special Conditions.
         target.mirror_shot_pending = False
@@ -256,6 +259,7 @@ class Battle:
         old_spot = 'Ativo' if target is p.active else 'Banco'
         p.hand.remove(candy)
         p.hand.remove(evolution)
+        target.pre_evolutions.append(target.card)
         target.card = evolution
         target.status = ''  # Evolving removes Special Conditions.
         target.mirror_shot_pending = False
@@ -477,6 +481,47 @@ class Battle:
                 p.deck.append(chosen)
             self.rng.shuffle(p.deck)
             self.log.append(f'P{i} May searches {len(drawn)} Pokémon and returns {len(drawn)}')
+        elif card.effect == 'wally_colorless':
+            # Wally explicitly takes a *Colorless* Energy from the Zone.
+            # This is an additional Supporter attachment, independent of the
+            # mono-type Energy Zone configuration and manual attachment.
+            candidates = [mon for mon in p.all_in_play() if mon.card.stage == 2]
+            if target is None:
+                target = max(candidates, key=lambda mon: (
+                    mon is p.active, -len(mon.energy))) if candidates else None
+            if target is None or target not in candidates:
+                raise RuleError('Wally needs a Stage 2 Pokémon in play')
+            p.hand.remove(card)
+            self._zone_attach(i, target, 'colorless', 'Wally')
+        elif card.effect == 'professor_turo':
+            # special_tags['future'] comes from the battle catalogue. A
+            # Future-looking name alone never qualifies for Turo.
+            candidates = [mon for mon in p.all_in_play() if 'future' in mon.card.tags]
+            if target is None:
+                bench_candidates = [mon for mon in p.bench if mon in candidates]
+                target = max(bench_candidates, key=lambda mon: (
+                    mon.damage, -len(mon.energy))) if bench_candidates else (
+                    p.active if p.active in candidates and p.bench else None)
+            if target is None or target not in candidates:
+                raise RuleError('Professor Turo needs a Future Pokémon in play')
+            if target is p.active and not p.bench:
+                # Avoid leaving no Active Pokémon in a game that continues.
+                raise RuleError('Professor Turo cannot remove the only Active Pokémon')
+            p.hand.remove(card)
+            if target is p.active:
+                replacement = max(p.bench, key=lambda mon:(len(mon.energy),mon.max_hp-mon.damage))
+                p.bench.remove(replacement)
+                p.active = replacement
+                self.log.append(f'P{i} Professor Turo promotes {replacement.card.name}')
+            else:
+                p.bench.remove(target)
+            p.energy_discard.update(target.energy)
+            returned = target.pre_evolutions + [target.card]
+            p.deck.extend(returned)
+            self.rng.shuffle(p.deck)
+            self.log.append(f'P{i} Professor Turo shuffles {target.card.name} '
+                            f'({len(returned)} Pokémon card(s)) into deck; '
+                            f'discards {len(target.energy)} Energy')
         elif card.effect == 'flame_patch':
             if (not p.active or p.active.card.element != 'fire'
                     or p.energy_discard['fire'] <= 0):
@@ -1034,8 +1079,24 @@ class RuleAgent:
             elif (pokemon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
                   and pokemon.damage + 30 < pokemon.max_hp):
                 battle.use_ability(pokemon)
+        # Supporters with specific eligibility: only spend them when useful.
+        # Wally accelerates Stage 2 Pokémon with genuine Colorless Energy.
+        if not p.supporter_used:
+            wally = next((c for c in p.hand if c.effect == 'wally_colorless'), None)
+            stage2 = [mon for mon in p.all_in_play() if mon.card.stage == 2]
+            if wally and stage2:
+                target = max(stage2, key=lambda mon:(mon is p.active, -len(mon.energy)))
+                battle.play_trainer(wally, target=target)
+        # Turo recycles a badly damaged Future Pokémon (no points awarded).
+        if not p.supporter_used:
+            turo = next((c for c in p.hand if c.effect == 'professor_turo'), None)
+            candidates = [mon for mon in p.bench if 'future' in mon.card.tags
+                          and mon.damage >= max(30, mon.max_hp // 2)]
+            if turo and candidates:
+                target = max(candidates,key=lambda mon:(mon.damage / mon.max_hp, -len(mon.energy)))
+                battle.play_trainer(turo, target=target)
         for c in list(p.hand):
-            if c.effect == 'research' and len(p.hand) <= 8 and p.deck:
+            if c.effect == 'research' and not p.supporter_used and len(p.hand) <= 8 and p.deck:
                 battle.play_trainer(c)
                 break
         for c in list(p.hand):

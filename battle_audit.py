@@ -57,7 +57,7 @@ def inspect_state(game: Battle) -> list[str]:
                 issues.append(f'P{i} unknown status on {pokemon.card.name}')
             if pokemon.entered_at > game.turn or pokemon.evolved_at > game.turn:
                 issues.append(f'P{i} future evolution/entry timestamp')
-            if any(e not in ('grass','fire','water','lightning','psychic','fighting','darkness','metal')
+            if any(e not in ('grass','fire','water','lightning','psychic','fighting','darkness','metal','colorless')
                    for e in pokemon.energy):
                 issues.append(f'P{i} invalid energy attached')
         if not game.finished and player.points >= 3:
@@ -81,7 +81,8 @@ def snapshot(game: Battle, action: str) -> dict:
         if p is None:
             return None
         return {
-            'id': p.card.id, 'name': p.card.name,
+            'id': p.card.id, 'name': p.card.name, 'tags': list(p.card.tags),
+            'pre_evolutions': [c.name for c in p.pre_evolutions],
             'max_hp': p.max_hp, 'damage': p.damage,
             'hp_remaining': p.max_hp - p.damage,
             'energy': list(p.energy), 'status': p.status,
