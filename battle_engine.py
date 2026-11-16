@@ -1,4 +1,4 @@
-"""TCG Pocket rules kernel, v0.8.
+"""TCG Pocket rules kernel, v0.8.2.
 
 Only effects explicitly identified in cards are executable. Unsupported text MUST
 prevent a real matchup from being run; tests may use synthetic fixtures.
@@ -538,6 +538,31 @@ class RuleAgent:
     def __init__(self, line_map=None):
         self.line_map = line_map or {}
 
+    @staticmethod
+    def select_energy_target(player: Player) -> InPlay | None:
+        """Avoid charging a dead-end attack for a single-type Energy Zone.
+
+        This is a lightweight heuristic, not optimal play. If every Pokémon
+        currently in play lacks a usable attack we fall back to Active because
+        it may evolve in a later turn.
+        """
+        if not player.active:
+            return player.bench[0] if player.bench else None
+        element = player.energy_types[0]
+        preferred = []
+        for pokemon in player.all_in_play():
+            attacks = [a for a in pokemon.card.attacks
+                       if a.cost and all(t in (element, 'colorless') for t in a.cost)]
+            pending = [a for a in attacks if len(pokemon.energy) < len(a.cost)]
+            if not pending:
+                continue
+            # Damage comes first; Active wins a tie to reduce unnecessary stall.
+            strongest = max(a.damage + 30 * (a.effect == 'bench_plus_30') for a in pending)
+            score = (strongest, pokemon is player.active, pokemon.card.stage,
+                     -len(pokemon.energy))
+            preferred.append((score, pokemon))
+        return max(preferred, key=lambda x:x[0])[1] if preferred else player.active
+
     def play_turn(self, battle: Battle):
         i = battle.current
         p = battle.players[i]
@@ -616,8 +641,8 @@ class RuleAgent:
             if c.kind == 'pokemon' and c.stage == 0 and len(p.bench) < 3:
                 battle.bench_basic(c)
         if not p.energy_used and not (battle.turn == 0 and battle.first == i):
-            # Charge active attacker preferentially.
-            target = p.active if p.active else (p.bench[0] if p.bench else None)
+            # Single-type energy policy: favor a Pokémon with a payable attack.
+            target = self.select_energy_target(p)
             if target:
                 battle.attach(target)
                 if battle.finished:

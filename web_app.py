@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.8.1: two tournament-backed meta presets and audited effects."""
+"""TCG Pocket Lab v0.8.2: safe deck transfer and clearer debugging."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -11,6 +11,7 @@ from engine_diagnostics import run_smoke_checks
 from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_deck
 from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
+from deck_transfer import stage_transfer, apply_pending_transfer
 
 META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
@@ -76,26 +77,27 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.8.1','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.8.2','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
-    counts=data['cards']
-    if not isinstance(counts,dict) or any(cid not in by_id or type(n) is not int or not 1<=n<=2 for cid,n in counts.items()):
-        raise ValueError('IDs ou quantidades inválidos no catálogo atual')
-    if sum(counts.values())>20: raise ValueError('Mais de 20 cartas')
-    grouped=defaultdict(int)
-    for cid,n in counts.items(): grouped[by_id[cid]['name'].casefold()]+=n
-    if any(n>2 for n in grouped.values()): raise ValueError('Mais de duas cópias do mesmo nome')
-    energies=data.get('energy_types',[])
-    if not isinstance(energies,list) or not 1<=len(energies)<=3 or len(energies)!=len(set(energies)) or any(e not in ENERGIES for e in energies):
-        raise ValueError('Tipos de energia inválidos')
-    st.session_state.counts=dict(counts)
-    st.session_state.energy=list(energies)
-    st.session_state.deck_name=str(data.get('name','Meu deck'))[:100]
+    """Validate and stage import; apply it on the next Streamlit script run.
+
+    It is unsafe to edit session_state.energy after the energy multiselect has
+    been instantiated in this run (the old Copy button did exactly that).
+    """
+    stage_transfer(st.session_state, data, by_id, ENERGIES)
+
+
+# This executes BEFORE st.text_input(deck_name) and st.multiselect(energy).
+# It works for Copy preset, Import JSON, and Open saved deck alike.
+apply_pending_transfer(st.session_state)
 
 st.title('🃏 TCG Pocket Lab')
-st.caption(f'v0.8.1 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
+st.caption(f'v0.8.2 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
 st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
+_notice = st.session_state.pop('_deck_transfer_notice', None)
+if _notice:
+    st.success(f'Deck «{_notice}» carregado com sucesso. Abra a aba Meu deck para editar.')
 catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'])
 
 def reset_page():
@@ -193,7 +195,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8.1)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8.2)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -217,10 +219,10 @@ with lab_tab:
     st.subheader('Comparar dois decks')
     st.caption('Monte seu deck na aba Meu deck. Depois carregue o adversário para diagnosticar cartas e efeitos necessários.')
     opponent_mode = st.radio('Deck adversário',
-        ['Deck do meta (v0.8.1)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
+        ['Deck do meta (v0.8.2)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
         horizontal=False, key='opponent_mode')
     opponent_payload = None
-    if opponent_mode == 'Deck do meta (v0.8.1)':
+    if opponent_mode == 'Deck do meta (v0.8.2)':
         selected_slug = st.selectbox('Escolha o adversário', list(DECKS),
                                      format_func=lambda slug: DECKS[slug]['name'],
                                      key='preset_opponent')
@@ -245,7 +247,6 @@ with lab_tab:
         if st.button('🧩 Copiar este deck para Meu deck',use_container_width=True):
             try:
                 load_payload(opponent_payload)
-                st.success('Deck carregado. Abra a aba Meu deck para editar.')
                 st.rerun()
             except ValueError as exc:
                 st.error(f'Não foi possível copiar a lista: {exc}')
@@ -337,6 +338,9 @@ with lab_tab:
                         st.session_state['debug_trace']={
                             'seed':int(technical_seed), 'turns':demo.turn,
                             'winner':demo.winner,
+                            'first_player':demo.first,
+                            'energy_left':list(payload()['energy_types']),
+                            'energy_right':list(opponent_payload['energy_types']),
                             'events':demo.log,
                             'left':payload(),'right':opponent_payload}
                     except (RuleError, UnsupportedEffect, ValueError, IndexError) as exc:
@@ -346,6 +350,9 @@ with lab_tab:
                     st.info(f'Depuração concluída: {trace["turns"]} meios-turnos; '
                             'veja o histórico abaixo. O resultado não estima competitividade.')
                     with st.expander('Histórico da partida',expanded=True):
+                        st.caption(f'P0 (Meu deck): {", ".join(trace.get("energy_left", []))} · '
+                                   f'P1 (Adversário): {", ".join(trace.get("energy_right", []))} · '
+                                   f'Começou: P{trace.get("first_player", "?")}')
                         st.code('\n'.join(trace['events'][-250:]),language=None)
                     st.download_button('⬇️ Baixar replay JSON',
                                        json.dumps(trace,ensure_ascii=False,indent=2),
@@ -374,7 +381,7 @@ with lab_tab:
                            file_name='experimento.json')
     st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.8.1')
+    st.subheader('Motor de regras v0.8.2')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA básica e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
