@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.7: two-deck compatibility and technical match replay."""
+"""TCG Pocket Lab v0.8: two tournament-backed meta presets and audited effects."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -10,6 +10,7 @@ from gameplay_catalog import GAMEPLAY_URL, audit_core_cards, audit_gameplay_reco
 from engine_diagnostics import run_smoke_checks
 from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_deck
 from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
+from meta_decks import DECKS, get_preset, verify_presets
 
 META = ['Mega Altaria / Greninja', 'Mega Charizard Y / Entei', 'Suicune / Baxcalibur', 'Magnezone / Miraidon', 'Hoopa / Mega Absol']
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
@@ -75,7 +76,7 @@ def remove(cid):
     elif n>1: st.session_state.counts[cid]=n-1
 
 def payload():
-    return {'format':'tcgp-lab-v0.7','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
+    return {'format':'tcgp-lab-v0.8','name':st.session_state.deck_name,'energy_types':list(st.session_state.energy),'cards':dict(st.session_state.counts)}
 
 def load_payload(data):
     counts=data['cards']
@@ -93,7 +94,7 @@ def load_payload(data):
     st.session_state.deck_name=str(data.get('name','Meu deck'))[:100]
 
 st.title('🃏 TCG Pocket Lab')
-st.caption(f'v0.7 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
+st.caption(f'v0.8 · {len(cards):,} cartas jogáveis · catálogo comunitário · simulações competitivas não validadas'.replace(',', '.'))
 st.progress(min(total()/20,1),text=f'🧩 Meu deck: {total()}/20 cartas')
 catalog_tab, deck_tab, lab_tab, motor_tab, info_tab = st.tabs(['🔎 Cartas','🧩 Meu deck','⚔️ Meta','⚙️ Motor','ℹ️ Sobre'])
 
@@ -192,7 +193,7 @@ with deck_tab:
     if issues: st.warning(' | '.join(issues))
     else: st.success('Passou nas verificações estruturais disponíveis; legalidade completa ainda não confirmada.')
     st.download_button('⬇️ Exportar deck JSON',json.dumps(payload(),ensure_ascii=False,indent=2),file_name='meu_deck.json',mime='application/json',use_container_width=True)
-    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.7)',type=['json'])
+    uploaded=st.file_uploader('Importar deck JSON (v0.4–v0.8)',type=['json'])
     if uploaded and st.button('Importar arquivo'):
         try:
             load_payload(json.load(uploaded)); st.rerun()
@@ -216,10 +217,39 @@ with lab_tab:
     st.subheader('Comparar dois decks')
     st.caption('Monte seu deck na aba Meu deck. Depois carregue o adversário para diagnosticar cartas e efeitos necessários.')
     opponent_mode = st.radio('Deck adversário',
-        ['Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
+        ['Deck do meta (v0.8)','Importar JSON','Deck salvo na sessão','Espelhar meu deck (depuração)'],
         horizontal=False, key='opponent_mode')
     opponent_payload = None
-    if opponent_mode == 'Importar JSON':
+    if opponent_mode == 'Deck do meta (v0.8)':
+        selected_slug = st.selectbox('Escolha o adversário', list(DECKS),
+                                     format_func=lambda slug: DECKS[slug]['name'],
+                                     key='preset_opponent')
+        opponent_payload = get_preset(selected_slug)
+        audit_preset = verify_presets(cards)[selected_slug]
+        if audit_preset['ready_to_inspect']:
+            st.caption('Lista de 20 cartas com IDs correspondentes ao catálogo carregado.')
+        else:
+            st.error('A fonte do catálogo mudou: ' + ', '.join(audit_preset['missing_ids']) +
+                     ' · confira os IDs antes de executar qualquer teste.')
+        st.caption(opponent_payload['description'])
+        st.markdown(f'[Consultar lista de origem]({opponent_payload["source"]}) '
+                    f'· cartas verificadas até {opponent_payload["sample_through"]}.')
+        st.dataframe([{'Qtd.': n, 'Carta': by_id[cid]['name'] if cid in by_id else cid,
+                       'Expansão': cid.split('-')[0].upper(), 'ID': cid}
+                      for cid,n in opponent_payload['cards'].items()],
+                     use_container_width=True, hide_index=True)
+        st.download_button('⬇️ Baixar lista do adversário',
+                           json.dumps(opponent_payload,ensure_ascii=False,indent=2),
+                           file_name=f'{selected_slug}.json',mime='application/json',
+                           use_container_width=True)
+        if st.button('🧩 Copiar este deck para Meu deck',use_container_width=True):
+            try:
+                load_payload(opponent_payload)
+                st.success('Deck carregado. Abra a aba Meu deck para editar.')
+                st.rerun()
+            except ValueError as exc:
+                st.error(f'Não foi possível copiar a lista: {exc}')
+    elif opponent_mode == 'Importar JSON':
         opponent_file = st.file_uploader('Deck adversário exportado do TCG Pocket Lab (.json)',
                                          type=['json'], key='opponent_deck_json')
         if opponent_file is not None:
@@ -273,7 +303,7 @@ with lab_tab:
                         st.info('Adicione cartas na aba Meu deck.')
             st.download_button('⬇️ Exportar relatório de compatibilidade',
                                data=json.dumps(match_report,ensure_ascii=False,indent=2),
-                               file_name='compatibilidade_decks_v07.json',
+                               file_name='compatibilidade_decks_v08.json',
                                mime='application/json', use_container_width=True)
             st.divider()
             st.subheader('Duelo técnico — 1 partida')
@@ -314,8 +344,9 @@ with lab_tab:
 
     st.divider()
     st.subheader('Planejamento contra o meta')
-    st.caption('Os arquétipos abaixo ainda não têm listas de 20 cartas verificadas '
-               'nesta versão. Selecioná-los prepara um plano, não partidas.')
+    st.caption('Mega Altaria/Greninja e Hoopa/Mega Absol possuem presets de 20 cartas. '
+               'Os outros arquétipos permanecem como planejamento, sem listas cadastradas. '
+               'Nenhum confronto possui autorização para simulação competitiva.')
     opponents=st.multiselect('Adversários do meta',META,default=META)
     games=st.number_input('Partidas planejadas por confronto',min_value=1,
                            max_value=1_000_000,value=100_000,step=10_000)
@@ -330,11 +361,11 @@ with lab_tab:
                            file_name='experimento.json')
     st.button('▶️ Simular 100 mil partidas competitivas',disabled=True)
 with motor_tab:
-    st.subheader('Motor de regras v0.7')
+    st.subheader('Motor de regras v0.8')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA básica e replay por semente.')
-    st.markdown('**Efeitos adicionais codificados:** Pesquisa de Professores, Poké Bola, descarte aleatório do Mega Swampert ex, cura própria de 30 pontos e bônus de 30 por moeda, reconhecidos apenas pelo texto exato.')
-    st.warning('Ainda não modelados: habilidades, condições especiais, ferramentas, estádios, zona de energia multicolorida, modificadores complexos, decisões ótimas e resoluções simultâneas. A partida de depuração não reproduz necessariamente todas as regras oficiais.')
+    st.markdown('**Novos efeitos técnicos:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
+    st.warning('Ainda não são universais: condições especiais além de Sono, ferramentas/efeitos fora destes presets, estádios, zona multicolorida, estratégia avançada, tratamento de simultaneidade e validação de eventos competitivos. Não use os resultados de depuração como win rates.')
     st.divider()
     st.subheader('Auditoria do catálogo')
     audit=audit_core_cards(cards)

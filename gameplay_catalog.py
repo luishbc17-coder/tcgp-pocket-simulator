@@ -89,6 +89,33 @@ def _recognize_trainer(r: dict):
         and 'stage 2' in text and 'skipping the stage 1' in text
         and "can't use this card during your first turn" in text):
         return 'rare_candy'
+    if name == 'Copycat' and text == ("shuffle your hand into your deck. "
+                                              "draw a card for each card in your opponent's hand"):
+        return 'copycat'
+    if name == 'Pokémon Center Lady' and text == (
+            'heal 30 damage from 1 of your pokémon, and it recovers from all special conditions'):
+        return 'center_lady'
+    if name == 'Repel' and text == (
+            "switch out your opponent's active basic pokémon to the bench. "
+            '(your opponent chooses the new active pokémon.)'):
+        return 'repel'
+    if name == 'Cyrus' and text == ("switch in 1 of your opponent's benched pokémon "
+                                            "that has damage on it to the active spot"):
+        return 'cyrus'
+    if name == 'Mars' and text == ("your opponent shuffles their hand into their deck "
+                                           "and draws a card for each of their remaining points needed to win"):
+        return 'mars'
+    if name == 'X Speed' and text == ("during this turn, the retreat cost of your "
+                                              "active pokémon is 1 less"):
+        return 'x_speed'
+    if name == 'Field Blower' and text == (
+            "discard a pokémon tool card from a pokémon (yours or your opponent's) , "
+            'or discard a stadium card in play'):
+        return 'field_blower'
+    if name == 'Lucky Ice Pop' and text == (
+            'heal 20 damage from your active pokémon. if you healed any damage in this way, '
+            'flip a coin. if heads, put this lucky ice pop into your hand instead of discarding it'):
+        return 'lucky_ice_pop'
     raise UnsupportedEffect(f'{name}: texto de treinador não implementado')
 
 
@@ -98,6 +125,10 @@ def _recognize_attack(r: dict, raw_attack: dict):
     effect = _text(raw_attack.get('effect'))
     if name is None:
         return None
+    if (r['name'] == 'Swablu' and name == 'Sing'
+        and raw_attack.get('cost') == 'C' and damage is None
+        and effect == "your opponent's active pokémon is now asleep"):
+        return Attack(name, parse_cost('C'), 0, 'sleep_active')
     if not isinstance(damage, int) or damage < 0:
         raise UnsupportedEffect(f'{r["name"]} / {name}: dano dinâmico ou desconhecido')
     cost = parse_cost(raw_attack.get('cost'))
@@ -108,12 +139,47 @@ def _recognize_attack(r: dict, raw_attack: dict):
         return Attack(name, cost, damage, 'heal_self_30')
     if effect == 'flip a coin. if heads, this attack does 30 more damage':
         return Attack(name, cost, damage, 'coin_bonus_30')
+    # Two meta archetypes: exact card name + move + damage + cost + effect text.
+    if (r['name'] == 'Mega Altaria ex' and name == 'Mega Harmony'
+        and damage == 40 and raw_attack.get('cost') == 'PP'
+        and effect == 'this attack does 30 more damage for each of your benched pokémon'):
+        return Attack(name, cost, damage, 'bench_plus_30')
+    if r['name'] == 'Hoopa ex':
+        if (name == 'Shadow Bullet' and damage == 30 and raw_attack.get('cost') == 'D'
+            and effect == "this attack also does 20 damage to 1 of your opponent's benched pokémon"):
+            return Attack(name, cost, damage, 'snipe_20_bench')
+        if (name == 'Dynamite Punch' and damage == 100 and raw_attack.get('cost') == 'DDC'
+            and effect == 'this pokémon also does 20 damage to itself'):
+            return Attack(name, cost, damage, 'recoil_20')
+    if (r['name'] == 'Mega Absol ex' and name == 'Darkness Claw'
+        and damage == 80 and raw_attack.get('cost') == 'DD'
+        and effect == 'your opponent reveals their hand. choose a supporter card you find there and discard it'):
+        return Attack(name, cost, damage, 'discard_opponent_supporter')
+    if (r['name'] == 'Chingling' and name == 'Jingly Noise' and damage == 10
+        and raw_attack.get('cost') == '0'
+        and effect == "during your opponent's next turn, they can't play any item cards from their hand"):
+        return Attack(name, cost, damage, 'item_lock_next_turn')
     # Curated single effect, checked by name, base damage and the full known text.
     if (r['name'] == 'Mega Swampert ex' and name == 'Strong-Armed Destroyer'
         and damage == 150 and raw_attack.get('cost') == 'WWW'
         and effect == 'discard 2 random energy from among the energy attached to all pokémon (both yours and your opponent\'s)'):
         return Attack(name, cost, damage, 'discard_2_global_random')
     raise UnsupportedEffect(f'{r["name"]} / {name}: efeito de ataque não implementado')
+
+
+def _recognize_ability(r: dict) -> str:
+    data = r.get('ability') or {}
+    if not data.get('exists'):
+        return ''
+    name = data.get('name')
+    effect = _text(data.get('effect'))
+    if (r['name'] == 'Greninja' and name == 'Water Shuriken'
+        and effect == "once during your turn, you may do 20 damage to 1 of your opponent's pokémon"):
+        return 'water_shuriken'
+    if (r['name'] == 'Darkrai ex' and name == 'Nightmare Aura'
+        and effect == "whenever you attach a [d] energy from your energy zone to this pokémon, do 20 damage to your opponent's active pokémon"):
+        return 'nightmare_aura'
+    raise UnsupportedEffect(f'{r["name"]}: habilidade {name} ainda não implementada')
 
 
 def compile_card(raw: dict) -> Card:
@@ -128,14 +194,23 @@ def compile_card(raw: dict) -> Card:
             kind = 'supporter'
         elif subtype == 'item':
             kind = 'item'
+        elif subtype == 'tool':
+            kind = 'tool'
         else:
             raise UnsupportedEffect(f'{raw["name"]}: tipo {subtype} não implementado')
+        if kind == 'tool':
+            detail = _text(raw.get('card_text'))
+            if (raw['name'] == 'Lucky Egg' and detail ==
+                "if the pokémon this card is attached to is knocked out by damage from an attack from your opponent's pokémon, draw cards until you have 5 cards in your hand"):
+                return Card(raw['id'],raw['name'],kind,effect='lucky_egg')
+            if (raw['name'] == 'Deceptive Needle' and detail ==
+                "at the end of your turn, if the [ d ] pokémon this card is attached to is in the active spot, do 10 damage to your opponent's active pokémon"):
+                return Card(raw['id'],raw['name'],kind,effect='deceptive_needle')
+            raise UnsupportedEffect(f'{raw["name"]}: efeito de ferramenta ainda não implementado')
         return Card(raw['id'], raw['name'], kind, effect=_recognize_trainer(raw))
     if raw.get('type') != 'Pokémon':
         raise UnsupportedEffect(f'{raw["name"]}: categoria desconhecida')
-    ability = raw.get('ability') or {}
-    if ability.get('exists'):
-        raise UnsupportedEffect(f'{raw["name"]}: habilidade não implementada')
+    ability_handler = _recognize_ability(raw)
     stage_map = {'Basic': 0, 'Stage 1': 1, 'Stage 2': 2}
     if raw.get('stage') not in stage_map:
         raise UnsupportedEffect(f'{raw["name"]}: estágio desconhecido')
@@ -169,7 +244,7 @@ def compile_card(raw: dict) -> Card:
     return Card(raw['id'],raw['name'],'pokemon',stage_map[raw['stage']],
                 raw.get('evolves_from') or '',hp,points,
                 element,str(raw.get('weakness') or '').casefold(),retreat,
-                tuple(out))
+                tuple(out), ability=ability_handler)
 
 
 def compile_deck(counts: dict[str,int], gameplay: list[dict]) -> tuple[list[Card], list[str]]:
