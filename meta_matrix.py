@@ -16,7 +16,7 @@ from batch_runner import run_technical_batch
 from gameplay_catalog import evolution_line_map
 from meta_decks import DECKS as REGISTERED_DECKS
 
-MAX_MATRIX_DECKS = 26
+MAX_MATRIX_DECKS = 31
 MAX_GAMES_PER_PAIR = 100
 MAX_TOTAL_MATRIX_GAMES = 2500
 
@@ -203,7 +203,7 @@ def run_meta_matrix(presets: dict[str, dict], core: list[dict],
             progress(completed_before, total)
     summary = summarize_matrix(plan, results)
     return {
-        'kind':'technical_meta_matrix', 'version':'0.9.8',
+        'kind':'technical_meta_matrix', 'version':'0.9.9',
         'validated_competitive':False,
         'disclaimer':('Resultados de IA heurística em motor parcial, com mesmo peso por adversário; '
                       'não são probabilidades reais do metagame nem ranking oficial.'),

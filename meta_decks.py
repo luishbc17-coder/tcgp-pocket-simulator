@@ -1,4 +1,4 @@
-"""Dated 20-card consensus sample lists for TWENTY-SIX Pocket archetypes (2026-11-16).
+"""Dated 20-card sample lists for THIRTY-ONE Pocket archetypes (2026-11-16).
 
 IDs are the lowercase PocketDecks v5 IDs, NOT the display-style P-A-005.
 These are community consensus samples; they are not a particular tournament winner.
@@ -371,6 +371,70 @@ DECKS = {
         'cards':{'a1-087':2,'a1-089':2,'b4-103':2,'b3b-041':1,'pa-007':2,
                  'b1-225':2,'a2-150':1,'pa-005':2,'a3-144':2,
                  'pa-002':2,'b4-148':2},
+    },
+
+
+    # v0.9.9: five additional dated 20-card deck samples. Catalog-only until
+    # mechanics can be audited; intentionally NO new attack/ability handlers.
+    'glaceon_ex_vaporeon': {
+        'name':'Glaceon ex / Vaporeon',
+        'energy_types':['water'],
+        'source':'https://pokebase.app/pokemon-tcg-pocket/archetype/glaceon-ex-vaporeon',
+        'source_checked':'2026-11-17','sample_through':'histórico; data exata não publicada',
+        'description':'Lista completa documentada de torneio (yisus777, 93º); Glaceon ex Snowy Terrain não implementada. Outra variante ficou em 4º, porém sem lista completa recuperável; não é tier competitivo atual.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Glaceon ex Snowy Terrain e demais efeitos da lista não passaram por auditoria do motor.',
+        'cards':{'a3b-055':2,'a2a-022':2,'a1a-019':2,'a2-050':1,'b1a-065':1,
+                 'a1-220':2,'pa-007':1,'a1-225':1,'a2-150':1,'b1-225':1,
+                 'pa-005':2,'a3b-066':1,'pa-002':1,'a2-146':1,'a4a-067':1},
+    },
+    'mega_mewtwo_x_diancie': {
+        'name':'Mega Mewtwo X ex / Mega Diancie ex',
+        'energy_types':['psychic'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/mega-mewtwo-x-ex-c1-mega-diancie-ex-b3b',
+        'source_checked':'2026-11-17','sample_through':'2026-11-12',
+        'description':'Lista representativa agregada de 53 amostras de torneio; contém estádio e ferramenta não auditados.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Efeitos de ferramentas, estádio e Pokémon requerem auditoria.',
+        'cards':{'b3b-031':2,'b3b-032':1,'c1-056':1,'b3b-035':1,
+                 'b2-155':2,'pa-005':2,'pa-007':2,'c1-123':2,'c1-127':2,
+                 'b1-225':1,'b2-145':1,'a2b-070':1,'a1-225':1,'a2-150':1},
+    },
+    'alolan_exeggutor_ribombee': {
+        'name':'Alolan Exeggutor ex / Ribombee',
+        'energy_types':['grass'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/alolan-exeggutor-ex-ribombee-c1',
+        'source_checked':'2026-11-17','sample_through':'2026-11-06',
+        'description':'Lista representativa agregada de 49 amostras de torneio; habilidades e estádio pendentes.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Ataques, Quick-Grow Extract e Fragrant Forest não auditados.',
+        'cards':{'c1-015':2,'a1a-001':2,'c1-005':2,'c1-014':2,'b3-004':1,
+                 'b1a-067':2,'pa-007':2,'b3-153':2,'a3-147':2,'b1-225':1,
+                 'b2-145':1,'a2-150':1},
+    },
+    'chien_pao_baxcalibur': {
+        'name':'Chien-Pao ex / Baxcalibur',
+        'energy_types':['water'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/chien-pao-ex-baxcalibur-b2a',
+        'source_checked':'2026-11-17','sample_through':'2026-11-13',
+        'description':'Lista representativa agregada de 10 amostras de torneio; aceleração de energia exige validação.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Aceleração de energia e ferramentas ainda não auditadas.',
+        'cards':{'b2a-036':2,'b2a-037':2,'pb-037':2,
+                 'a3-144':2,'pa-005':2,'b1-225':2,'c1-127':2,
+                 'c1-123':2,'b2b-069':1,'b3-147':1,'pa-007':1,'a1-220':1},
+    },
+    'mega_gardevoir_diancie': {
+        'name':'Mega Gardevoir ex / Mega Diancie ex',
+        'energy_types':['psychic'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/mega-gardevoir-ex-b2-mega-diancie-ex-b3b',
+        'source_checked':'2026-11-17','sample_through':'2026-11-13',
+        'description':'Lista representativa agregada de 10 amostras de torneio; habilidades ainda não auditadas.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Habilidades de Gardevoir/Diancie, estádio e apoiadores ainda não auditados.',
+        'cards':{'b2-070':2,'b2-066':2,'b3b-032':1,'b2-063':1,'a3-080':1,'b2-064':1,
+                 'pa-007':2,'a3-144':2,'b2-155':2,'b2-149':2,'pa-005':2,
+                 'a2-150':1,'b1-225':1},
     },
 
 }

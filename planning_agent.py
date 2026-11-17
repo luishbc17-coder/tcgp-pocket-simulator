@@ -1,4 +1,4 @@
-"""v0.9.8: bounded, public-information, two-own-turn *projection*.
+"""v0.9.8 baseline plus v0.9.9 public-information planning improvements.
 
 This is deliberately not a search through a deep-copied Battle: that would
 expose hidden opponent cards/shuffle state. We project only our visible board,
@@ -297,3 +297,251 @@ class PlanningAgentV098(StrategicAgentV097):
         self._note('retreat',best['name'] if best else 'manter ativo',options,
             'Trocar somente se a melhora projetada superar 24 pontos e o recuo for legal')
         return p.all_in_play()[best['index']] if best else None
+
+
+class PlanningAgentV099(PlanningAgentV098):
+    """v0.9.9: resource-aware two-own-turn public-state projection.
+
+    This remains a heuristic *projection*, not a hidden-card or deterministic
+    game-tree solver. It never mutates Battle or reads opponent hand/deck.
+    """
+    policy_name = 'planning_v099'
+    FUTURE_DISCOUNT = 0.61
+    RETREAT_PENALTY = 30.0
+
+    @staticmethod
+    def _retreat_cost(mon: InPlay, discount: int = 0) -> int:
+        boat = bool(mon.tool and mon.tool.effect == 'inflatable_boat' and mon.card.element == 'water')
+        balloon = bool(mon.tool and mon.tool.effect == 'small_balloon' and mon.card.stage == 0)
+        return max(0, mon.card.retreat - discount - int(boat) - int(balloon))
+
+    def _note(self, decision, chosen, alternatives, reason):
+        """Counterfactual *scores*, not claims about observed alternate games."""
+        enriched = [dict(item) for item in alternatives]
+        ranked = sorted(enriched, key=lambda x:-x.get('score',-1e6))
+        chosen_row = next((x for x in enriched if x.get('name') == chosen), None)
+        if chosen_row is None and chosen == 'não anexar':
+            chosen_score = getattr(self,'_energy_baseline_score',None)
+        else:
+            chosen_score = chosen_row.get('score') if chosen_row else None
+        if chosen_score is not None:
+            for row in enriched:
+                row['delta_vs_chosen'] = round(row['score'] - chosen_score, 3)
+                row['counterfactual_kind'] = 'estimativa_no_mesmo_estado'
+        super()._note(decision, chosen, enriched, reason)
+        if self.decision_records and self.decision_records[-1]['decision'] == decision:
+            note=self.decision_records[-1]
+            best_alternative=max((r['score'] for r in enriched if r.get('name')!=chosen), default=None)
+            note['chosen_projected_score']=chosen_score
+            note['best_rejected_projected_score']=best_alternative
+            note['projected_margin']=(round(chosen_score-best_alternative,3)
+                   if chosen_score is not None and best_alternative is not None else None)
+            note['audit_limitations']='Comparação heurística entre ações; não é resultado causal de partidas contrafactuais.'
+
+    def _future_best(self, own, active_idx, enemy, player, zone,
+                     enemy_reply_damage, enemy_ko):
+        """One attachment next turn; apply legal retreat payment and real evolution card.
+
+        An attached Energy may only benefit the Pokémon that receives it. One
+        evolution already in own hand can be used; unknown draws are excluded.
+        """
+        if enemy.max_hp <= enemy.damage:
+            return {'score':0.0,'attack':'alvo nocauteado','pokemon':'—',
+                    'attacher':None,'bench_access_discount':0,'evolution_in_hand':False}
+        candidates=[]
+        for idx,original in enumerate(own[:self.MAX_OWN_BRANCHES]):
+            if idx == active_idx and enemy_ko:
+                continue
+            retreat_cost=0
+            if idx != active_idx and not enemy_ko:
+                retreat_cost=self._retreat_cost(own[active_idx])
+                if len(own[active_idx].energy)<retreat_cost:
+                    continue
+            base=self._clone(original)
+            if base.max_hp<=base.damage:
+                continue
+            evolutions=[(base.card,False)]
+            if player.turns_taken + 1 >= 2:
+                for card in player.hand:
+                    if (card.kind=='pokemon' and card.stage==base.card.stage+1 and
+                        card.evolves_from.casefold()==base.card.name.casefold()):
+                        evolutions.append((card,True))
+            for evo,is_evolution in evolutions:
+                for add_energy in (False,True):
+                    mon=self._clone(base)
+                    if is_evolution:
+                        mon.card=evo  # Real evolution's HP, weakness, and attacks
+                    if mon.max_hp <= mon.damage:
+                        continue
+                    if add_energy:
+                        mon.energy.append(zone)
+                    payable=[a for a in mon.card.attacks if self._payable(mon,a)]
+                    if not payable:
+                        continue
+                    for attack in payable:
+                        _,raw,ko=self._attack_effect_value(mon,enemy,attack,len(own)-1)
+                        value=raw - (17*retreat_cost + self.RETREAT_PENALTY if idx!=active_idx and not enemy_ko else 0)
+                        # Future attachment is an opportunity cost, not free
+                        value -= (3 if add_energy else 0)
+                        if is_evolution:
+                            value -= 8  # known but contingent on future timing
+                        if enemy_ko:
+                            value -= 6  # forced promotion, potential new risk
+                        candidates.append({'score':round(value,3),'attack':attack.name,
+                            'pokemon':mon.card.name,'attacher':original.card.name if add_energy else None,
+                            'bench_access_discount':1.0,'evolution_in_hand':is_evolution,
+                            'requires_switch':idx!=active_idx and not enemy_ko,
+                            'retreat_energy_paid':retreat_cost,'future_attachment':add_energy,
+                            'projected_ko':ko})
+        return max(candidates,key=lambda x:x['score']) if candidates else {
+            'score':0.0,'attack':'nenhum ataque legal alcançável','pokemon':'—',
+            'attacher':None,'bench_access_discount':0,'evolution_in_hand':False}
+
+    def _opponent_threat(self, attacker, foe, own_bench, foe_bench):
+        """Known paid attacks plus *marked uncertain* one-energy reply.
+
+        Opponent Energy Zone is not read. An extra card's own element is only
+        a plausible, explicitly discounted worst-case reply.
+        """
+        options=super()._opponent_threat(attacker,foe,own_bench,foe_bench)
+        current_names={x[3] for x in options}
+        for attack in foe.card.attacks:
+            if attack.name in current_names or self._payable(foe,attack):
+                continue
+            hypothetical=self._clone(foe)
+            hypothetical.energy.append(foe.card.element)
+            if not self._payable(hypothetical,attack):
+                continue
+            dmg=self.predicted_damage(hypothetical,attacker,attack,foe_bench)
+            if attack.effect=='water_snipe_130_discard':
+                dmg=0.0
+            remaining=attacker.max_hp-attacker.damage
+            ko=bool(dmg>=remaining and remaining>0 and dmg>0)
+            harm=(min(max(0.0,dmg),remaining)*0.75 +
+                  (165+55*max(0,attacker.card.points-1) if ko else 0)) * 0.52
+            options.append((harm,dmg,ko,attack.name+' [possível +1 Energia]'))
+        return sorted(options,reverse=True)[:self.MAX_REPLY_BRANCHES]
+
+    def _path(self,p,foe,target_idx=None,fixed_attack=None,fixed_active_idx=None):
+        if not p.active or not foe.active:
+            return {'score':-1e6,'current':'sem ativo','next':'—','risk':0,'response':'—'}
+        own=[self._clone(m) for m in p.all_in_play()]
+        enemy=self._clone(foe.active)
+        zone=p.energy_types[0]
+        if target_idx is not None:
+            if not 0<=target_idx<len(own):
+                raise ValueError('Índice de anexo inválido')
+            own[target_idx].energy.append(zone)
+        active_idx=0 if fixed_active_idx is None else fixed_active_idx
+        if not 0<=active_idx<len(own):
+            return {'score':-1e6,'current':'recuo inválido','next':'—','risk':0,'response':'—'}
+        active=own[active_idx]
+        retreat_cost=0
+        if active_idx:
+            if p.retreated or p.active.status=='asleep':
+                return {'score':-1e6,'current':'recuo ilegal','next':'—','risk':0,'response':'—'}
+            retreat_cost=self._retreat_cost(own[0],p.retreat_discount)
+            if len(own[0].energy)<retreat_cost:
+                return {'score':-1e6,'current':'recuo sem energia','next':'—','risk':0,'response':'—'}
+            own[0].energy=own[0].energy[retreat_cost:]
+        attacks=[fixed_attack] if fixed_attack else list(active.card.attacks)
+        attacks=[a for a in attacks if self._payable(active,a) and active.status!='asleep']
+        if not attacks:
+            attacks=[None]
+        outcomes=[]
+        for attack in attacks:
+            now_damage,now_value,now_ko=(self._attack_effect_value(active,enemy,attack,len(own)-1)
+                                         if attack else (0,0,False))
+            if now_ko and (p.points+enemy.card.points>=3 or not foe.bench):
+                outcomes.append({'score':850+40*enemy.card.points,'current':attack.name,
+                   'next':'vitória imediata','risk':0,'response':'partida encerrada','now_ko':True})
+                continue
+            rivals=([self._clone(x) for x in foe.bench[:self.MAX_REPLY_BRANCHES]]
+                    if now_ko else [self._clone(enemy)])
+            if not now_ko:
+                rivals[0].damage+=int(now_damage)
+            future_own=[self._clone(mon) for mon in own]
+            if attack and attack.effect=='discard_all_self_energy':
+                future_own[active_idx].energy=[]
+            elif attack and attack.effect=='water_snipe_130_discard':
+                future_own[active_idx].energy=[x for x in future_own[active_idx].energy if x!='water']
+            risk_paths=[]
+            for rival in rivals:
+                replies=self._opponent_threat(active,rival,len(own)-1,len(foe.bench))
+                for harm,damage,ko,reply in replies:
+                    survivors=[self._clone(m) for m in future_own]
+                    # Mark a KO on the active before evaluating replacement.
+                    survivors[active_idx].damage+=int(damage)
+                    if ko and (foe.points+active.card.points>=3 or len(own)==1):
+                        future={'score':0,'attack':'derrota projetada'}
+                        total=now_value - 850 - harm
+                    else:
+                        future=self._future_best(survivors,active_idx,rival,p,zone,damage,ko)
+                        total=now_value - 0.90*harm + self.FUTURE_DISCOUNT*future['score']
+                    total-= (self.RETREAT_PENALTY+17*retreat_cost) if active_idx else 0
+                    if attack is None:
+                        total-=12
+                    # Preserve resources: do not reward merely attaching to bench.
+                    risk_paths.append((total,harm,reply,future))
+            if risk_paths:
+                total,harm,reply,future=min(risk_paths,key=lambda x:x[0])
+                outcomes.append({'score':round(total,3),'current':attack.name if attack else 'passar sem ataque',
+                   'next':future['attack'],'risk':round(harm,2),
+                   'future_attack':future,'response':reply,'now_ko':now_ko})
+        return max(outcomes,key=lambda x:x['score'])
+
+    def select_energy_target(self,player):
+        battle=self._context_battle
+        if battle is None or len(player.energy_types)!=1:
+            return super().select_energy_target(player)
+        foe=battle.players[1-battle.current]
+        if not player.active or not foe.active:
+            return super().select_energy_target(player)
+        baseline=self._path(player,foe)
+        self._energy_baseline_score=baseline['score']
+        options=[{'name':'não anexar','score':baseline['score'],
+                  'current_attack':baseline['current'],'next_attack':baseline['next'],
+                  'incoming_risk':baseline['risk']}]
+        for idx,mon in enumerate(player.all_in_play()[:self.MAX_OWN_BRANCHES]):
+            if mon.max_hp<=mon.damage:
+                continue
+            path=self._path(player,foe,target_idx=idx)
+            delta=path['score']-baseline['score']
+            # Reward finishing the Active's attack, not overloading an already
+            # paid one. Encourage bench only for a real legal future path.
+            enabled=any(not self._payable(mon,a) and self._can_reach(mon,a,player.energy_types[0],1)
+                        for a in mon.card.attacks)
+            bonus=7 if (idx==0 and enabled) else 0
+            # Future turns are limited, so avoid many surplus attachments.
+            if not enabled and len(mon.energy)>=2:
+                bonus-=8
+            score=round(path['score']+bonus,3)
+            options.append({'name':mon.card.name,'index':idx,'score':score,
+               'current_attack':path['current'],'next_attack':path['next'],
+               'incoming_risk':path['risk'],'enemy_response':path['response'],
+               'improvement_vs_no_attachment':round(delta,3),
+               'enables_attack_immediately':enabled})
+        best=max(options,key=lambda x:(x['score'], -x.get('index',9)))
+        for row in options:
+            if row is not best:
+                row['rejected_because']='menor projeção considerando turno seguinte e custo de oportunidade'
+        self._note('energy',best['name'],options,
+                   'Compara não anexar e cada destino; energias só alimentam ataques legalmente alcançáveis')
+        return player.all_in_play()[best['index']] if 'index' in best else None
+
+    def _retreat_option(self,battle):
+        p=battle.players[battle.current];foe=battle.players[1-battle.current]
+        if not p.active or not foe.active or not p.bench or p.retreated:
+            return None
+        stay=self._path(p,foe,fixed_active_idx=0)
+        options=[{'name':'manter ativo','score':stay['score'],'feasible':True}]
+        for idx,mon in enumerate(p.all_in_play()[1:self.MAX_OWN_BRANCHES],start=1):
+            result=self._path(p,foe,fixed_active_idx=idx)
+            options.append({'name':mon.card.name,'index':idx,'score':result['score'],
+                 'feasible':result['score']>-1e5,
+                 'reason':result['current'] if result['score']>-1e5 else 'recuo inviável'})
+        candidates=[r for r in options[1:] if r['feasible'] and r['score']>stay['score']+20]
+        best=max(candidates,key=lambda x:x['score']) if candidates else options[0]
+        self._note('retreat',best['name'],options,
+                   'Preserva atacante; o custo do recuo já foi descontado e exige margem adicional de 20')
+        return p.all_in_play()[best['index']] if 'index' in best else None
