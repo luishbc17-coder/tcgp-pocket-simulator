@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.6: strategic policy duel and 16 sourced presets."""
+"""TCG Pocket Lab v0.9.7: strategic policy duel and 16 sourced presets."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -326,7 +326,7 @@ if current_view == '🏆 Matriz':
         options=[20,40,100], value=20, key='matrix_games_v094')
     matrix_policy = st.selectbox('Política usada pelos dois jogadores',
         ['strategic','tactical','baseline'],
-        format_func=lambda mode: {'strategic':'Estratégica v0.9.6', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
+        format_func=lambda mode: {'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
         key='matrix_policy_v094')
     matrix_seed = st.number_input('Semente da matriz', min_value=0, max_value=2_000_000_000,
         step=1, value=20261116, key='matrix_seed_v094')
@@ -360,7 +360,7 @@ if current_view == '🏆 Matriz':
             st.error(f'Não foi possível verificar os decks: {type(exc).__name__}: {exc}')
     else:
         st.info('Selecione pelo menos dois decks para montar a matriz.')
-    matrix_requested_games = (matrix_plan['total_pairs'] * int(matrix_games)
+    matrix_requested_games = (matrix_plan['ready_pairs'] * int(matrix_games)
                               if matrix_plan else 0)
     if matrix_requested_games > MAX_TOTAL_MATRIX_GAMES:
         st.warning(f'Esta seleção exigiria {matrix_requested_games} partidas. '
@@ -571,7 +571,8 @@ if current_view == '🏆 Matriz':
 
 
     # Direct, mirror-deck policy duel isolates AI choices from deck strength.
-    with st.expander('🧠 Laboratório de decisões · IA contra IA', expanded=False):
+    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.7', expanded=False):
+        st.caption('A Estratégica v0.9.7 é experimental e pode ser inferior à v0.9.6 em alguns decks. Compare antes de adotá-la.')
         st.caption('Duas IAs jogam entre si usando a MESMA lista, com posições e ordem '
                    'de início equilibradas. Isso é mais útil para comparar políticas '
                    'do que modificar a IA dos dois lados simultaneamente.')
@@ -580,18 +581,25 @@ if current_view == '🏆 Matriz':
             key='direct_duel_deck_v096')
         duel_col1, duel_col2 = st.columns(2)
         with duel_col1:
-            ai_a = st.selectbox('IA A', ['strategic','tactical','baseline'],
-                 format_func=lambda m:{'strategic':'Estratégica','tactical':'Tática','baseline':'Clássica'}[m],
+            ai_a = st.selectbox('IA A', ['strategic','strategic_v096','tactical','baseline'],
+                 format_func=lambda m:{'strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
                  key='direct_duel_a_v096')
         with duel_col2:
-            ai_b = st.selectbox('IA B', ['tactical','baseline','strategic'],
-                 format_func=lambda m:{'strategic':'Estratégica','tactical':'Tática','baseline':'Clássica'}[m],
+            ai_b = st.selectbox('IA B', ['strategic_v096','tactical','baseline','strategic'],
+                 format_func=lambda m:{'strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
                  key='direct_duel_b_v096')
         duel_games = st.select_slider('Partidas do confronto entre IAs',
             options=[20,100,200,400],value=100,key='direct_duel_n_v096')
         duel_seed = st.number_input('Semente para comparação direta', min_value=0,
             max_value=2_000_000_000, value=20261116, step=1,
             key='direct_duel_seed_v096')
+        benchmark_split = st.radio('Conjunto de sementes', ['development', 'holdout'],
+            format_func=lambda v:'Desenvolvimento (ajuste)' if v=='development' else
+                'Validação reservada (teste independente)',
+            horizontal=True, key='direct_duel_split_v097')
+        st.caption('Na validação reservada, as sementes são deslocadas em +10 milhões. '
+                   'Não use o resultado de validação para ajustar pesos e depois '
+                   'afirmar que essa mesma amostra é independente.')
         duel_preset = get_preset(duel_slug)
         duel_block = duel_preset.get('simulation_blocked_reason','')
         if ai_a == ai_b:
@@ -614,21 +622,25 @@ if current_view == '🏆 Matriz':
                     tuple(duel_preset['energy_types']),
                     evolution_line_map(game_cards_duel),
                     policy_a=ai_a,policy_b=ai_b,games=int(duel_games),
-                    seed=int(duel_seed),
+                    seed=int(duel_seed), benchmark_split=benchmark_split,
+                    keep_replay=True,deck_name=duel_preset['name'],
                     progress=lambda done,target:progress_duel.progress(
                         min(1.,done/target),text=f'{done}/{target} partidas')
                         if target else None)
                 st.session_state['direct_duel_report_v096']={
-                    'config':(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed)),
+                    'config':(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed),benchmark_split),
                     'report':duel_report}
                 progress_duel.progress(1.,text='Comparação concluída')
             except (RuleError,UnsupportedEffect,ValueError,TypeError,IndexError,
                     KeyError,AssertionError,AttributeError,RuntimeError) as exc:
                 st.error(f'Confronto das IAs não pôde ser executado: {type(exc).__name__}: {exc}')
         saved_duel=st.session_state.get('direct_duel_report_v096')
-        if saved_duel and saved_duel['config']==(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed)):
+        if saved_duel and saved_duel['config']==(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed),benchmark_split):
             report=saved_duel['report']
             st.metric('Partidas auditadas',report['completed'])
+            st.caption('Deck: '+str(report.get('deck_name',duel_preset['name'])))
+            st.caption('Conjunto: '+str(report.get('benchmark_split','development'))+
+                ' · primeira semente: '+str(report.get('effective_seed',report['seed'])))
             o=report['outcomes'];ci=report['a_score_interval']
             st.markdown(f'**{ai_a}**: {o["a"]} vitórias · '
                         f'**{ai_b}**: {o["b"]} vitórias · {o["draw"]} empates')
@@ -637,12 +649,23 @@ if current_view == '🏆 Matriz':
                            f'(IC aproximado de 95%: {ci["lower_pct"]:.1f}–{ci["upper_pct"]:.1f}%). '
                            'Não é uma taxa de vitória contra jogadores humanos.')
             st.caption('Indicadores observados no histórico, não uma avaliação perfeita das jogadas. Os totais devem ser lidos junto com o número de turnos de cada IA.')
+            if report.get('scenario_intervals'):
+                by_start = report['scenario_intervals']
+                a_first = by_start['a_first']['score_pct']
+                b_first = by_start['b_first']['score_pct']
+                st.caption(f'Pontuação da IA A: {a_first:.1f}% começando primeiro; '
+                           f'{b_first:.1f}% começando em segundo. Consulte os '
+                           'intervalos completos no JSON; subgrupos têm menor amostra.')
             st.dataframe([{'IA': 'A · '+ai_a,'Energia anexada':report['telemetry']['left']['counts'].get('energy_attached',0),
                  'Turnos sem ataque':report['telemetry']['left']['counts'].get('turns_without_attack',0),
+                 'Nocautes':report['telemetry']['left']['counts'].get('knockouts',0),
+                 'Pontos marcados':report['telemetry']['left']['counts'].get('points_scored',0),
                  'Evoluções':report['telemetry']['left']['counts'].get('evolutions',0),
                  'Recuos':report['telemetry']['left']['counts'].get('retreats',0)},
                  {'IA':'B · '+ai_b,'Energia anexada':report['telemetry']['right']['counts'].get('energy_attached',0),
                  'Turnos sem ataque':report['telemetry']['right']['counts'].get('turns_without_attack',0),
+                 'Nocautes':report['telemetry']['right']['counts'].get('knockouts',0),
+                 'Pontos marcados':report['telemetry']['right']['counts'].get('points_scored',0),
                  'Evoluções':report['telemetry']['right']['counts'].get('evolutions',0),
                  'Recuos':report['telemetry']['right']['counts'].get('retreats',0)}],
                  hide_index=True,use_container_width=True)
@@ -653,11 +676,23 @@ if current_view == '🏆 Matriz':
                     st.caption(f'{label}: {counts.get("turns_without_attack",0)/turns:.1%} '
                                f'dos turnos sem ataque · {counts.get("energy_attached",0)/turns:.2f} '
                                'energias anexadas por turno (média).')
+            if report.get('decision_audit'):
+                with st.expander('🔍 Auditoria — alternativas avaliadas pela IA', expanded=False):
+                    st.caption('Registra as alternativas consideradas nos turnos amostrados, '
+                               'pontuação heurística e motivo. Não é prova de jogada ótima.')
+                    st.json(report['decision_audit'], expanded=False)
+            if report.get('sample_replay'):
+                with st.expander('🎞️ Replay auditado da primeira partida', expanded=False):
+                    st.code('\n'.join(report['sample_replay'].get('events',[])),language='text')
+                    st.json(report['sample_replay'].get('snapshots',[]),expanded=False)
+            st.caption('As energias anexadas são contadas no formato real do log e '
+                       'separadas em anexação manual ou por efeito. Isso não mede '
+                       'automaticamente a qualidade de cada anexação.')
             if report['errors']:
                 st.error('Algumas partidas falharam; não interprete as vitórias como resultado completo.')
             st.download_button('⬇️ Baixar benchmark de IA',
                 data=json.dumps(report,ensure_ascii=False,indent=2),
-                file_name='duelo_ias_v096.json',mime='application/json',
+                file_name='duelo_ias_v097.json',mime='application/json',
                 key='download_direct_duel_v096',use_container_width=True)
 
 
@@ -692,14 +727,14 @@ if current_view == '⚔️ Meta':
                 st.error(f'Não foi possível carregar este deck: {exc}')
     policy_label = st.selectbox(
         'Política da IA para este experimento',
-        ['Estratégica v0.9.6 — prioriza recursos e sobrevivência',
+        ['Estratégica v0.9.7 — prioriza recursos e sobrevivência',
          'Tática v0.9 — considera evoluções e melhores trocas',
          'Clássica v0.8.4 — referência anterior'],
         key='policy_choice_v09',
         help='A mesma política controla os dois jogadores. Não é treinamento de modelo de IA.')
     agent_mode = ('strategic' if policy_label.startswith('Estratégica') else
                   'tactical' if policy_label.startswith('Tática') else 'baseline')
-    st.caption('Estratégica: energia por urgência e evolução, recuo defensivo e custo de recursos; nenhuma nova regra de cartas foi implementada.')
+    st.caption('Estratégica v0.9.7: prioriza nocaute/pontos, desenvolve energia e audita decisões; nenhuma nova regra de carta foi implementada.')
 
     st.divider()
     st.markdown(section('Meu deck × Todo o meta',
@@ -1227,7 +1262,7 @@ if current_view == '⚔️ Meta':
 
 
 if current_view == '⚙️ Motor':
-    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.6')
+    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.7')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica, tática e estratégica selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')

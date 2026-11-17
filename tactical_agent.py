@@ -355,7 +355,12 @@ class TacticalAgent(RuleAgent):
         if p.active and p.active.status != 'asleep':
             viable = [a for a in p.active.card.attacks if battle.can_pay_energy(p.active, a)]
             if viable:
-                best = max(viable, key=lambda a: self.attack_utility(p.active, foe.active, p.bench, a))
-                battle.attack(best)
+                battle.attack(self._choose_attack(battle, viable))
                 return
         battle.end_turn()
+
+    def _choose_attack(self, battle: Battle, viable: list[Attack]) -> Attack:
+        player = battle.players[battle.current]
+        opponent = battle.players[1 - battle.current]
+        return max(viable, key=lambda a: self.attack_utility(
+            player.active, opponent.active, player.bench, a))

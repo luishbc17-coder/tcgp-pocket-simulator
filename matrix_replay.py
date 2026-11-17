@@ -8,7 +8,7 @@ from battle_audit import AuditedBattle
 from batch_runner import verify_engine_compatibility
 from battle_engine import RuleAgent
 from tactical_agent import TacticalAgent
-from strategic_agent import StrategicAgent
+from strategic_agent import StrategicAgentV097
 from matchup_compatibility import load_compiled_deck
 from gameplay_catalog import evolution_line_map
 from deck_identity import describe_selection
@@ -46,7 +46,7 @@ def replay_matrix_round(report:dict, presets:dict[str,dict],
                          tuple(a['energy_types']),tuple(b['energy_types']),
                          seed=row['seed'],force_first=row['first_player'],
                          collect_trace=True)
-    agent={'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgent}[mode](evolution_line_map(gameplay))
+    agent={'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097}[mode](evolution_line_map(gameplay))
     while not battle.finished:
         agent.play_turn(battle)
     left_side=0 if row['p0_deck']==lid else 1

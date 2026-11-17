@@ -1,4 +1,4 @@
-"""Dated 20-card consensus sample lists for ELEVEN Pocket archetypes (2026-11-16).
+"""Dated 20-card consensus sample lists for TWENTY-ONE Pocket archetypes (2026-11-16).
 
 IDs are the lowercase PocketDecks v5 IDs, NOT the display-style P-A-005.
 These are community consensus samples; they are not a particular tournament winner.
@@ -252,6 +252,69 @@ DECKS = {
                  'a1-087':1,'a1-089':1,'a3a-007':1,'b3b-061':1,
                  'c1-127':2,'pa-007':2,'b1-225':1,'a2-150':1,
                  'pa-005':2,'a3-144':2,'b3b-064':1},
+    },
+    # v0.9.7: five sourced, exact 20-card sample lists, library-only.
+    # IDs checked against PocketDecks v5 gameplay records on 2026-11-16.
+    'dragonair_mega_rayquaza': {
+        'name':'Dragonair / Mega Rayquaza ex',
+        'energy_types':['fire','lightning'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/dragonair-mega-rayquaza-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Dragão multicolorido; lista de torneio completa e identificada, sem efeitos novos.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Energy Zone multicolorida e novos efeitos ainda não foram auditados.',
+        'cards':{'b2b-051':2,'b4-117':2,'b3a-054':2,'b4-120':1,
+                 'pa-007':2,'b1-225':2,'a2b-070':1,'b3a-072':1,
+                 'a1-225':1,'pa-005':2,'b3a-069':1,'b3b-064':1,'b4-155':2},
+    },
+    'dedenne_indeedee': {
+        'name':'Dedenne ex / Indeedee ex',
+        'energy_types':['lightning','psychic','grass'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/dedenne-ex-indeedee-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Lista representativa com três tipos de energia; cadastrada apenas para edição.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Energy Zone multicolorida e novos efeitos ainda não foram auditados.',
+        'cards':{'b3b-024':2,'b1-121':2,'a3-066':2,'b2-017':1,
+                 'b1-225':2,'pa-007':2,'a2-150':1,'pa-005':2,
+                 'a2-147':2,'b3b-064':2,'a3b-067':1,'b2-147':1},
+    },
+    'butterfree_mega_sceptile': {
+        'name':'Butterfree / Mega Sceptile ex',
+        'energy_types':['grass'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/butterfree-mega-sceptile-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-10-27',
+        'description':'Lista representativa da janela de outubro; sem nova habilidade implementada.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista de 20 cartas registrada; efeitos e habilidades ainda exigem auditoria.',
+        'cards':{'b3b-001':2,'b3b-002':2,'b3b-003':2,'b3-005':1,
+                 'b3-006':1,'b3-008':1,'pa-007':2,'a1-219':1,
+                 'b1-225':1,'a1-225':1,'a2-150':1,'b1a-067':2,
+                 'a3-147':1,'b3-153':2},
+    },
+    'pikachu_pawmot': {
+        'name':'Pikachu ex / Pawmot',
+        'energy_types':['lightning'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/pikachu-ex-pawmot',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Lista representativa elétrica; importação disponível, jogo ainda bloqueado.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista de 20 cartas registrada; efeitos e habilidades ainda exigem auditoria.',
+        'cards':{'c1-048':2,'c1-050':2,'c1-043':2,'c1-047':1,
+                 'pa-007':2,'b1-225':2,'a2-150':1,'c1-127':1,
+                 'pa-005':2,'a3-144':2,'a3a-064':1,'c1-124':2},
+    },
+    'umbreon_mega_absol': {
+        'name':'Umbreon / Mega Absol ex',
+        'energy_types':['darkness'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/mega-absol-ex-umbreon',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Nova variante Noturna com Umbreon, Absol e Mega Sableye.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista de 20 cartas registrada; efeitos e habilidades ainda exigem auditoria.',
+        'cards':{'b1-184':2,'c1-084':2,'b1-151':2,'b3b-041':1,
+                 'b1-225':2,'pa-007':2,'a2-154':1,'a1-225':1,
+                 'a2-150':1,'pa-005':2,'pa-002':2,'b4-148':2},
     },
 
 }

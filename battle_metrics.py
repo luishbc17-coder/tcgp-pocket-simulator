@@ -9,7 +9,7 @@ import re
 
 ATTACK = re.compile(r'^P([01]) (.+?) uses (.+?), (\d+) damage')
 TRAINER = re.compile(r'^P([01]) plays (.+)$')
-ENERGY = re.compile(r'^P([01]) attaches (grass|fire|water|lightning|psychic|fighting|darkness|metal) to ')
+ENERGY = re.compile(r'^P([01]) ([^:]+): \+1 (grass|fire|water|lightning|psychic|fighting|darkness|metal|colorless) to ')
 TURN = re.compile(r'^Turn \d+, P([01])$')
 EVOLUTION = re.compile(r'^P([01]) (?:evolves |Rare Candy:)')
 KO = re.compile(r'^P[01] (?:Active|Bench|bench)?\s?KO .+; P([01]) score (\d+)$')
@@ -21,6 +21,7 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
     trainers = {0: Counter(), 1: Counter()}
     last_turn_owner = None
     last_turn_attacked = False
+    last_score = {0:0,1:0}
 
     def finish_turn():
         if last_turn_owner is not None and not last_turn_attacked:
@@ -50,7 +51,12 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
             continue
         match = ENERGY.match(event)
         if match:
-            stats[int(match.group(1))]['energy_attached'] += 1
+            side, source, _energy = match.groups()
+            stats[int(side)]['energy_attached'] += 1
+            if source == 'manual energy':
+                stats[int(side)]['manual_energy'] += 1
+            else:
+                stats[int(side)]['effect_energy'] += 1
             continue
         match = EVOLUTION.match(event)
         if match:
@@ -76,7 +82,10 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
             continue
         match = KO.match(event)
         if match:
-            stats[int(match.group(1))]['knockouts'] += 1
+            side, score = int(match.group(1)), int(match.group(2))
+            stats[side]['knockouts'] += 1
+            stats[side]['points_scored'] += max(0,score-last_score[side])
+            last_score[side]=score
             continue
         if event.startswith(('P0 retreats into ', 'P1 retreats into ')):
             stats[int(event[1])]['retreats'] += 1
