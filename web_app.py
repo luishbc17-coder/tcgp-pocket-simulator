@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.4: audited meta matrix and responsive comparison."""
+"""TCG Pocket Lab v0.9.6: strategic policy duel and 16 sourced presets."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -13,10 +13,14 @@ from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
 from card_support import build_support_index, coverage_summary
 from meta_gauntlet import build_gauntlet_plan, run_meta_gauntlet, MAX_GAMES_PER_OPPONENT
-from meta_matrix import build_matrix_plan, run_meta_matrix, MAX_GAMES_PER_PAIR
+from meta_matrix import build_matrix_plan, run_meta_matrix, MAX_GAMES_PER_PAIR, MAX_TOTAL_MATRIX_GAMES
+from matrix_insights import score_interval, compare_matrix_policies, interesting_rounds
+from matrix_replay import replay_matrix_round
 from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
+from strategic_agent import StrategicAgent
+from policy_duel import duel_policies
 from deck_identity import describe_selection, compare_decks
 from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
                           deck_overview, matchup_preview, result_bars, status_pill, library_summary,
@@ -313,14 +317,16 @@ if current_view == '🏆 Matriz':
     st.caption('Resultados técnicos com IA heurística, não probabilidades reais do meta. '
                'O ranking atribui 1 ponto por vitória e meio ponto por empate, '
                'com o mesmo número de partidas por adversário.')
+    st.caption(f'🆕 Biblioteca ampliada: {len(DECKS)} decks. Os sete anteriores seguem selecionados por padrão; '
+               'escolha os novos quando quiser testá-los. Listas novas aguardam auditoria individual.')
     selected_matrix = st.multiselect('Decks participantes', options=list(DECKS),
-        default=list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
+        default=list(DECKS)[:7], format_func=lambda slug: DECKS[slug]['name'],
         key='matrix_selected_v094')
     matrix_games = st.select_slider('Partidas por confronto',
         options=[20,40,100], value=20, key='matrix_games_v094')
     matrix_policy = st.selectbox('Política usada pelos dois jogadores',
-        ['tactical','baseline'],
-        format_func=lambda mode: ('Tática v0.9' if mode == 'tactical' else 'Clássica v0.8.4'),
+        ['strategic','tactical','baseline'],
+        format_func=lambda mode: {'strategic':'Estratégica v0.9.6', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
         key='matrix_policy_v094')
     matrix_seed = st.number_input('Semente da matriz', min_value=0, max_value=2_000_000_000,
         step=1, value=20261116, key='matrix_seed_v094')
@@ -354,7 +360,14 @@ if current_view == '🏆 Matriz':
             st.error(f'Não foi possível verificar os decks: {type(exc).__name__}: {exc}')
     else:
         st.info('Selecione pelo menos dois decks para montar a matriz.')
-    can_run_matrix = bool(matrix_plan and matrix_plan['ready_pairs'] > 0)
+    matrix_requested_games = (matrix_plan['total_pairs'] * int(matrix_games)
+                              if matrix_plan else 0)
+    if matrix_requested_games > MAX_TOTAL_MATRIX_GAMES:
+        st.warning(f'Esta seleção exigiria {matrix_requested_games} partidas. '
+                   f'O limite por execução é {MAX_TOTAL_MATRIX_GAMES}. '
+                   'Reduza o número de decks ou de partidas por confronto.')
+    can_run_matrix = bool(matrix_plan and matrix_plan['ready_pairs'] > 0
+                          and matrix_requested_games <= MAX_TOTAL_MATRIX_GAMES)
     if st.button('▶ Executar matriz de confrontos', key='run_matrix_v094',
                  use_container_width=True, disabled=not can_run_matrix):
         bar = st.progress(0, text='Preparando matriz auditada…')
@@ -398,7 +411,14 @@ if current_view == '🏆 Matriz':
         st.markdown('### 🏆 Ranking experimental')
         st.caption('Pontuação = (vitórias + 0,5 × empates) ÷ partidas. '
                    'A posição só é atribuída quando todos os pares terminam sem falhas.')
-        st.markdown(matrix_rank_cards(summary['ranking']), unsafe_allow_html=True)
+        enriched_rank = []
+        for rank_row in summary['ranking']:
+            interval = score_interval(rank_row['wins'],rank_row['losses'],rank_row['draws'])
+            enriched_rank.append({**rank_row,
+                'ci_lower':interval['lower_pct'],'ci_upper':interval['upper_pct']})
+        st.markdown(matrix_rank_cards(enriched_rank), unsafe_allow_html=True)
+        st.caption('IC de 95% aproximado pelo método de Wilson (empate vale meia vitória). '
+                   'Reflete apenas variação amostral do simulador, não erros da IA ou do motor.')
         st.markdown('### 🔄 Quem começa leva vantagem?')
         first = summary['first_player']
         if first['games']:
@@ -413,11 +433,121 @@ if current_view == '🏆 Matriz':
         st.caption('Em cada célula: pontuação percentual do deck da linha contra '
                    'o deck da coluna; empate vale meio ponto. Deslize lateralmente no celular.')
         st.markdown(matrix_heatmap(matrix_report),unsafe_allow_html=True)
+        completed_with_ci=[]
+        for pair in matrix_report['pairs']:
+            if pair['status']=='completed':
+                o=pair['outcomes']
+                ci=score_interval(o['left'],o['right'],o['draw'])
+                completed_with_ci.append((ci['half_width_pct'],pair,ci))
+        if completed_with_ci:
+            widest=max(completed_with_ci,key=lambda item:item[0])
+            st.caption(f'Maior incerteza amostral: {widest[1]["left_name"]} × '
+                       f'{widest[1]["right_name"]} — '
+                       f'{widest[2]["lower_pct"]:.1f}% a {widest[2]["upper_pct"]:.1f}% '
+                       'para o primeiro deck.')
         with st.expander('⚔️ Ver os confrontos individualmente',expanded=False):
-            st.markdown(matrix_pair_cards(matrix_report['pairs']),unsafe_allow_html=True)
+            focus=st.selectbox('Filtrar confrontos por deck',
+                options=['Todos']+list(selected_matrix),
+                format_func=lambda slug: DECKS[slug]['name'] if slug in DECKS else slug,
+                key='matrix_pair_filter_v095')
+            visible_pairs=[p for p in matrix_report['pairs'] if focus=='Todos' or
+                           focus in (p['left_slug'],p['right_slug'])]
+            st.caption(f'{len(visible_pairs)} confronto(s) nesta seleção.')
+            st.markdown(matrix_pair_cards(visible_pairs),unsafe_allow_html=True)
+        st.markdown('### 🔍 Reproduzir uma partida por semente')
+        st.caption('Escolha uma rodada do relatório para reconstruir as jogadas e os estados do campo. '
+                   'O replay é comparado com o resultado original; divergências ficam explícitas.')
+        shortest=interesting_rounds(matrix_report,5)
+        if shortest:
+            st.caption('Rodadas mais rápidas: '+ ' · '.join(
+                f'{x["left_name"]} × {x["right_name"]}: '
+                f'rodada {x["round"]} ({x["half_turns"]} meios-turnos)'
+                for x in shortest[:3]))
+        completed_pairs=[p for p in matrix_report['pairs'] if p['status']=='completed']
+        if completed_pairs:
+            pair_idx=st.selectbox('Confronto para investigar',
+                options=list(range(len(completed_pairs))),
+                format_func=lambda idx:(f'{completed_pairs[idx]["left_name"]} × '
+                                        f'{completed_pairs[idx]["right_name"]}'),
+                key='matrix_replay_pair_v095')
+            replay_pair=completed_pairs[pair_idx]
+            if st.session_state.get('matrix_replay_round_v095',1) > replay_pair['completed']:
+                st.session_state['matrix_replay_round_v095']=1
+            replay_round=st.number_input('Rodada do confronto',min_value=1,
+                max_value=int(replay_pair['completed']),step=1,value=1,
+                key='matrix_replay_round_v095')
+            if st.button('🔁 Reproduzir rodada auditada',key='run_matrix_replay_v095',
+                         use_container_width=True):
+                try:
+                    replay=replay_matrix_round(matrix_report,matrix_field,matrix_data,
+                        replay_pair['left_slug'],replay_pair['right_slug'],int(replay_round))
+                    st.session_state['matrix_replay_result_v095']={
+                        'request':matrix_request,'pair':(replay_pair['left_slug'],
+                          replay_pair['right_slug']),'round':int(replay_round),
+                        'data':replay}
+                except (RuleError,UnsupportedEffect,ValueError,IndexError,
+                        TypeError,KeyError,RuntimeError,AssertionError) as exc:
+                    st.error(f'Replay não disponível: {type(exc).__name__}: {exc}')
+            replay_saved=st.session_state.get('matrix_replay_result_v095')
+            if replay_saved and replay_saved['request']==matrix_request and \
+               replay_saved['pair']==(replay_pair['left_slug'],replay_pair['right_slug']) and \
+               replay_saved['round']==int(replay_round):
+                replay=replay_saved['data']
+                if replay['matches_record']:
+                    st.success(f'✅ Replay confirmado: mesma vitória, duração e semente {replay["seed"]}.')
+                else:
+                    st.error('⚠️ A execução não coincide com o resultado original. '
+                             'Não considere esta rodada validada.')
+                with st.expander('📜 Jogadas registradas',expanded=False):
+                    st.code('\n'.join(replay['events']),language='text')
+                with st.expander('🩺 Estado do campo após cada ação',expanded=False):
+                    st.json(replay['snapshots'],expanded=False)
+                st.download_button('⬇️ Baixar replay completo',
+                    data=json.dumps(replay,ensure_ascii=False,indent=2),
+                    file_name='replay_matriz_v095.json',mime='application/json',
+                    key='download_matrix_replay_v095',use_container_width=True)
+        st.markdown('### 🧠 Comparar IA clássica × tática')
+        st.caption('Mantém as listas e sementes iniciais. Diferenças são descritivas: '
+                   'as decisões podem alterar eventos aleatórios posteriores.')
+        if summary['ranking_complete'] and matrix_policy in ('baseline','tactical'):
+            if st.button('⚖️ Executar política alternativa para comparar',
+                         key='run_matrix_ab_v095',use_container_width=True):
+                other_mode='baseline' if matrix_policy=='tactical' else 'tactical'
+                bar_ab=st.progress(0,text='Simulando política alternativa…')
+                try:
+                    other_report=run_meta_matrix(matrix_field,cards,matrix_data,
+                        games_per_pair=int(matrix_games),seed=int(matrix_seed),
+                        agent_mode=other_mode,
+                        progress=lambda done,expected:bar_ab.progress(
+                            min(1.,done/expected),text=f'{done}/{expected} partidas')
+                            if expected else None)
+                    baseline=other_report if other_mode=='baseline' else matrix_report
+                    tactical=other_report if other_mode=='tactical' else matrix_report
+                    comparison=compare_matrix_policies(baseline,tactical)
+                    st.session_state['matrix_ab_report_v095']={
+                        'request':matrix_request,'data':comparison}
+                    bar_ab.progress(1.0,text='Comparação concluída')
+                except (RuleError,UnsupportedEffect,ValueError,IndexError,TypeError,
+                        KeyError,RuntimeError,AssertionError) as exc:
+                    st.error(f'Comparação não concluída: {type(exc).__name__}: {exc}')
+            ab_saved=st.session_state.get('matrix_ab_report_v095')
+            if ab_saved and ab_saved['request']==matrix_request:
+                comp=ab_saved['data']
+                st.dataframe([{'Deck':r['name'],
+                    'Clássica (%)':r['classic_score_pct'],
+                    'Tática (%)':r['tactical_score_pct'],
+                    'Diferença (p.p.)':r['delta_pp']} for r in comp['rows']],
+                    hide_index=True,use_container_width=True)
+                st.caption(comp['warning'])
+                st.download_button('⬇️ Comparação entre IAs (JSON)',
+                    data=json.dumps(comp,ensure_ascii=False,indent=2),
+                    file_name='comparacao_matriz_v095.json',mime='application/json',
+                    key='download_matrix_ab_v095',use_container_width=True)
+        else:
+            st.info('Comparação A/B clássica × tática disponível após matriz completa com uma dessas duas políticas. Para avaliar a estratégica, use Duelo entre IAs abaixo.')
         st.download_button('⬇️ Baixar matriz completa em JSON',
             data=json.dumps(matrix_report,ensure_ascii=False,indent=2),
-            file_name='matriz_meta_v094.json',mime='application/json',
+            file_name='matriz_meta_v095.json',mime='application/json',
             key='download_matrix_json_v094',use_container_width=True)
         # A compact export is easier to inspect in a spreadsheet on a phone.
         import csv
@@ -433,10 +563,102 @@ if current_view == '🏆 Matriz':
                 outcome.get('draw',''),item.get('score_left_pct',''),
                 item.get('score_right_pct','')])
         st.download_button('⬇️ Baixar confrontos em CSV',
-            data='\ufeff'+buffer.getvalue(),file_name='matriz_meta_v094.csv',
+            data='\ufeff'+buffer.getvalue(),file_name='matriz_meta_v095.csv',
             mime='text/csv',key='download_matrix_csv_v094',use_container_width=True)
     elif saved_matrix:
         st.info('A configuração da matriz mudou. Execute novamente para atualizar os resultados.')
+
+
+
+    # Direct, mirror-deck policy duel isolates AI choices from deck strength.
+    with st.expander('🧠 Laboratório de decisões · IA contra IA', expanded=False):
+        st.caption('Duas IAs jogam entre si usando a MESMA lista, com posições e ordem '
+                   'de início equilibradas. Isso é mais útil para comparar políticas '
+                   'do que modificar a IA dos dois lados simultaneamente.')
+        duel_slug = st.selectbox('Deck de referência para ambas as IAs',
+            list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
+            key='direct_duel_deck_v096')
+        duel_col1, duel_col2 = st.columns(2)
+        with duel_col1:
+            ai_a = st.selectbox('IA A', ['strategic','tactical','baseline'],
+                 format_func=lambda m:{'strategic':'Estratégica','tactical':'Tática','baseline':'Clássica'}[m],
+                 key='direct_duel_a_v096')
+        with duel_col2:
+            ai_b = st.selectbox('IA B', ['tactical','baseline','strategic'],
+                 format_func=lambda m:{'strategic':'Estratégica','tactical':'Tática','baseline':'Clássica'}[m],
+                 key='direct_duel_b_v096')
+        duel_games = st.select_slider('Partidas do confronto entre IAs',
+            options=[20,100,200,400],value=100,key='direct_duel_n_v096')
+        duel_seed = st.number_input('Semente para comparação direta', min_value=0,
+            max_value=2_000_000_000, value=20261116, step=1,
+            key='direct_duel_seed_v096')
+        duel_preset = get_preset(duel_slug)
+        duel_block = duel_preset.get('simulation_blocked_reason','')
+        if ai_a == ai_b:
+            st.warning('Escolha duas IAs diferentes.')
+        if duel_block:
+            st.warning(f'Deck ainda não auditado: {duel_block}')
+        can_duel = ai_a != ai_b and not duel_block
+        if st.button('⚔️ Testar as duas IAs com o mesmo deck',
+                     key='run_direct_duel_v096',use_container_width=True,
+                     disabled=not can_duel):
+            progress_duel = st.progress(0,text='Preparando confronto entre IAs…')
+            try:
+                game_cards_duel = matrix_data if matrix_data is not None else fetch_gameplay_catalog()
+                from matchup_compatibility import inspect_deck
+                diagnosis_duel=inspect_deck(duel_preset,cards,game_cards_duel)
+                if not diagnosis_duel['technical_demo_ready']:
+                    raise ValueError('Deck incompatível. Revise as cartas pendentes no catálogo antes de jogar.')
+                duel_report=duel_policies(
+                    load_compiled_deck(duel_preset,game_cards_duel),
+                    tuple(duel_preset['energy_types']),
+                    evolution_line_map(game_cards_duel),
+                    policy_a=ai_a,policy_b=ai_b,games=int(duel_games),
+                    seed=int(duel_seed),
+                    progress=lambda done,target:progress_duel.progress(
+                        min(1.,done/target),text=f'{done}/{target} partidas')
+                        if target else None)
+                st.session_state['direct_duel_report_v096']={
+                    'config':(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed)),
+                    'report':duel_report}
+                progress_duel.progress(1.,text='Comparação concluída')
+            except (RuleError,UnsupportedEffect,ValueError,TypeError,IndexError,
+                    KeyError,AssertionError,AttributeError,RuntimeError) as exc:
+                st.error(f'Confronto das IAs não pôde ser executado: {type(exc).__name__}: {exc}')
+        saved_duel=st.session_state.get('direct_duel_report_v096')
+        if saved_duel and saved_duel['config']==(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed)):
+            report=saved_duel['report']
+            st.metric('Partidas auditadas',report['completed'])
+            o=report['outcomes'];ci=report['a_score_interval']
+            st.markdown(f'**{ai_a}**: {o["a"]} vitórias · '
+                        f'**{ai_b}**: {o["b"]} vitórias · {o["draw"]} empates')
+            if ci:
+                st.caption(f'Pontuação da IA A: {ci["score_pct"]:.1f}% '
+                           f'(IC aproximado de 95%: {ci["lower_pct"]:.1f}–{ci["upper_pct"]:.1f}%). '
+                           'Não é uma taxa de vitória contra jogadores humanos.')
+            st.caption('Indicadores observados no histórico, não uma avaliação perfeita das jogadas. Os totais devem ser lidos junto com o número de turnos de cada IA.')
+            st.dataframe([{'IA': 'A · '+ai_a,'Energia anexada':report['telemetry']['left']['counts'].get('energy_attached',0),
+                 'Turnos sem ataque':report['telemetry']['left']['counts'].get('turns_without_attack',0),
+                 'Evoluções':report['telemetry']['left']['counts'].get('evolutions',0),
+                 'Recuos':report['telemetry']['left']['counts'].get('retreats',0)},
+                 {'IA':'B · '+ai_b,'Energia anexada':report['telemetry']['right']['counts'].get('energy_attached',0),
+                 'Turnos sem ataque':report['telemetry']['right']['counts'].get('turns_without_attack',0),
+                 'Evoluções':report['telemetry']['right']['counts'].get('evolutions',0),
+                 'Recuos':report['telemetry']['right']['counts'].get('retreats',0)}],
+                 hide_index=True,use_container_width=True)
+            for side,label in [('left','IA A'),('right','IA B')]:
+                counts=report['telemetry'][side]['counts']
+                turns=counts.get('turns',0)
+                if turns:
+                    st.caption(f'{label}: {counts.get("turns_without_attack",0)/turns:.1%} '
+                               f'dos turnos sem ataque · {counts.get("energy_attached",0)/turns:.2f} '
+                               'energias anexadas por turno (média).')
+            if report['errors']:
+                st.error('Algumas partidas falharam; não interprete as vitórias como resultado completo.')
+            st.download_button('⬇️ Baixar benchmark de IA',
+                data=json.dumps(report,ensure_ascii=False,indent=2),
+                file_name='duelo_ias_v096.json',mime='application/json',
+                key='download_direct_duel_v096',use_container_width=True)
 
 
 if current_view == '⚔️ Meta':
@@ -444,7 +666,7 @@ if current_view == '⚔️ Meta':
         'Escolha seu oponente, confira os efeitos e investigue o comportamento da IA.',
         'BATTLE LAB'), unsafe_allow_html=True)
     st.caption('Os resultados são experimentais: a IA e o motor ainda não reproduzem todas as regras do jogo.')
-    st.button('🏆 Abrir matriz dos 21 confrontos', key='open_matrix_v094',
+    st.button('🏆 Abrir matriz de confrontos', key='open_matrix_v094',
         use_container_width=True,
         on_click=lambda: st.session_state.__setitem__('main_view_v0933','🏆 Matriz'))
     if st.session_state.get('_deck_transfer_notice_meta'):
@@ -470,12 +692,14 @@ if current_view == '⚔️ Meta':
                 st.error(f'Não foi possível carregar este deck: {exc}')
     policy_label = st.selectbox(
         'Política da IA para este experimento',
-        ['Tática v0.9 — considera evoluções e melhores trocas',
+        ['Estratégica v0.9.6 — prioriza recursos e sobrevivência',
+         'Tática v0.9 — considera evoluções e melhores trocas',
          'Clássica v0.8.4 — referência anterior'],
         key='policy_choice_v09',
         help='A mesma política controla os dois jogadores. Não é treinamento de modelo de IA.')
-    agent_mode = 'tactical' if policy_label.startswith('Tática') else 'baseline'
-    st.caption('IA tática: evita energias sem ataque viável, considera evoluções, recua com critério e usa Cyrus de modo mais seletivo.')
+    agent_mode = ('strategic' if policy_label.startswith('Estratégica') else
+                  'tactical' if policy_label.startswith('Tática') else 'baseline')
+    st.caption('Estratégica: energia por urgência e evolução, recuo defensivo e custo de recursos; nenhuma nova regra de cartas foi implementada.')
 
     st.divider()
     st.markdown(section('Meu deck × Todo o meta',
@@ -769,7 +993,12 @@ if current_view == '⚔️ Meta':
             st.subheader('Duelo técnico — 1 partida')
             st.caption('Execução apenas para depuração. A IA é básica, certas regras ainda '
                        'não estão modeladas e resultados não representam win rates reais.')
-            if match_report['technical_demo_ready']:
+            player_id=describe_selection(payload(),'Meu deck').get('recognized_preset')
+            player_pending=DECKS.get(player_id,{}).get('simulation_blocked_reason','')
+            opponent_id=describe_selection(opponent_payload,'Adversário').get('recognized_preset')
+            opponent_pending=(opponent_payload.get('simulation_blocked_reason') or
+                              DECKS.get(opponent_id,{}).get('simulation_blocked_reason',''))
+            if match_report['technical_demo_ready'] and not (player_pending or opponent_pending):
                 technical_seed = st.number_input('Semente do duelo',min_value=0,
                                                   value=20261116,key='technical_seed')
                 if st.button('▶ Executar uma partida de depuração',use_container_width=True):
@@ -781,7 +1010,7 @@ if current_view == '⚔️ Meta':
                             energy_left=tuple(payload()['energy_types']),
                             energy_right=tuple(opponent_payload['energy_types']),
                             line_map=evolution_line_map(game_cards),
-                            agent_cls=TacticalAgent if agent_mode == 'tactical' else None)
+                            agent_cls={'baseline':None,'tactical':TacticalAgent,'strategic':StrategicAgent}[agent_mode])
                         st.session_state['debug_trace']={
                             'agent_mode': agent_mode,
                             'seed':int(technical_seed), 'turns':demo.turn,
@@ -988,15 +1217,19 @@ if current_view == '⚔️ Meta':
                             use_container_width=True)
 
             else:
-                st.warning('Duelo técnico bloqueado: corrija os problemas listados nos dois decks.')
+                st.warning('Duelo técnico bloqueado: ainda há cartas ou efeitos aguardando auditoria.')
+                if player_pending:
+                    st.info('Seu deck: '+player_pending)
+                if opponent_pending:
+                    st.info('Adversário: '+opponent_pending)
     else:
         st.info('Importe ou selecione um deck adversário para iniciar o diagnóstico.')
 
 
 if current_view == '⚙️ Motor':
-    st.subheader('Motor de regras v0.9.3.4 — expansão incremental')
+    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.6')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
-    st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica e IA tática selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
+    st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica, tática e estratégica selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
     st.warning('Ainda não são universais: condições especiais além de Sono, ferramentas/efeitos fora destes presets, estádios, zona multicolorida, estratégia avançada e validação independente de fidelidade. Nocautes simultâneos de ataques agora são resolvidos em grupo e testados. Não trate os lotes técnicos como win rates reais.')
     st.divider()

@@ -1,4 +1,4 @@
-"""Presentation-only helpers for TCG Pocket Lab v0.9.4.
+"""Presentation-only helpers for TCG Pocket Lab v0.9.5.
 
 Keep this module free from Streamlit and battle engine imports so user-facing
 markup is independently testable. Never trust deck/card display strings as HTML.
@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.4'
+VERSION = '0.9.6'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),
@@ -244,6 +244,12 @@ CSS = r"""
   .lab-rank-card{padding:12px;}.lab-rank-foot strong{font-size:1.27rem;}
   .lab-matrix-scroll{margin-left:0;margin-right:0;}}
 
+.lab-score-main {display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;}
+.lab-ci {display:block;font-size:.69rem;color:var(--lab-muted);line-height:1.4;}
+.lab-insight {border:1px solid rgba(141,124,245,.23);border-radius:14px;padding:12px 14px;
+  background:rgba(141,124,245,.055);margin:8px 0;}
+.lab-insight strong {display:block;font-size:.95rem;}
+@media(max-width:700px){.lab-ci{font-size:.68rem;} .lab-matrix-legend{font-size:.7rem;}}
 </style>
 """
 
@@ -406,7 +412,7 @@ def gauntlet_cards(opponents: list[dict]) -> str:
     return '<div class="lab-gauntlet-grid">'+''.join(tiles)+'</div>'
 
 
-# === v0.9.4 meta-matrix presentation (the pure calculations live elsewhere) ===
+# === v0.9.5 meta-matrix presentation (the pure calculations live elsewhere) ===
 def matrix_rank_cards(ranking: list[dict]) -> str:
     """Render completed and incomplete ranks without unescaped deck names."""
     tiles = []
@@ -415,13 +421,18 @@ def matrix_rank_cards(ranking: list[dict]) -> str:
         score = (f"{float(entry['score_pct']):.1f}%"
                  if entry.get('score_pct') is not None else '—')
         value = float(entry.get('score_pct') or 0)
+        ci_text = (f'<small class="lab-ci">IC 95% aprox.: {float(entry["ci_lower"]):.1f}–{float(entry["ci_upper"]):.1f}%</small>'
+                   if entry.get('ci_lower') is not None and entry.get('ci_upper') is not None else '')
         tiles.append(
             '<article class="lab-rank-card">'
             '<div class="lab-rank-top">'
             f'<span class="lab-rank-pos">{safe(rank)}</span>'
             f'<span class="lab-rank-name">{safe(entry["name"])}</span></div>'
             '<div class="lab-rank-foot">'
+            '<div class="lab-score-main">'
             f'<strong>{safe(score)}</strong>'
+            f'{ci_text}'
+            '</div>'
             f'<span>{int(entry["wins"])}V · {int(entry["losses"])}D · {int(entry["draws"])}E<br>'
             f'{int(entry["played_pairs"])}/{int(entry["expected_pairs"])} confrontos</span></div>'
             f'<div class="lab-rank-meter"><span style="width:{max(0,min(100,value)):.2f}%"></span></div>'
@@ -467,6 +478,7 @@ def matrix_heatmap(report: dict) -> str:
             scores[(row['right_slug'],row['left_slug'])]=row['score_right_pct']
     letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     head = ''.join(f'<th scope="col">{letters[i]}</th>' for i in range(len(decks)))
+    table_width=max(630, 70*(len(decks)+1))
     rows=[]
     for i,d in enumerate(decks):
         cells=[]
@@ -483,6 +495,6 @@ def matrix_heatmap(report: dict) -> str:
         rows.append(f'<tr><th class="head" scope="row">{letters[i]}</th>{"".join(cells)}</tr>')
     legend = ' · '.join(f'<b>{letters[i]}</b> {safe(d["name"])}' for i,d in enumerate(decks))
     return ('<div class="lab-matrix-scroll" role="region" aria-label="Matriz de confronto — deslize para os lados">'
-            '<table class="lab-matrix-table"><thead><tr><th class="head">Deck</th>'
+            f'<table class="lab-matrix-table" style="min-width:{table_width}px"><thead><tr><th class="head">Deck</th>'
             f'{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
             f'<div class="lab-matrix-legend">{legend}</div>')

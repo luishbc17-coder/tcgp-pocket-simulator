@@ -13,6 +13,7 @@ from battle_engine import Battle, Card, RuleAgent, RuleError, UnsupportedEffect,
 from battle_audit import AuditedBattle, StateInvariantError, snapshot
 from deck_identity import describe_compiled, compare_decks
 from tactical_agent import TacticalAgent
+from strategic_agent import StrategicAgent
 from battle_metrics import count_logged_actions, merge_telemetry, new_telemetry, serialize_telemetry, duration_distribution
 
 MAX_BATCH_GAMES = 1_000
@@ -57,8 +58,8 @@ def run_technical_batch(left: list[Card], right: list[Card],
         raise ValueError(f'games must be 1..{MAX_BATCH_GAMES}')
     if type(seed) is not int or seed < 0:
         raise ValueError('seed must be a nonnegative integer')
-    if agent_mode not in ('baseline', 'tactical'):
-        raise ValueError('agent_mode must be baseline or tactical')
+    if agent_mode not in ('baseline', 'tactical', 'strategic'):
+        raise ValueError('agent_mode must be baseline, tactical or strategic')
     verify_engine_compatibility()
     left_e, right_e = tuple(energy_left), tuple(energy_right)
     validate_deck(left, left_e)
@@ -78,7 +79,7 @@ def run_technical_batch(left: list[Card], right: list[Card],
     total_actions = 0
     total_turns = 0
     replay = None
-    agent = (TacticalAgent if agent_mode == 'tactical' else RuleAgent)(line_map or {})
+    agent = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgent}[agent_mode](line_map or {})
     telemetry = new_telemetry()
     start_time = monotonic()
     for idx in range(games):

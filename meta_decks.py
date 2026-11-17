@@ -1,4 +1,4 @@
-"""Dated 20-card consensus sample lists for SEVEN Pocket archetypes (2026-11-16).
+"""Dated 20-card consensus sample lists for ELEVEN Pocket archetypes (2026-11-16).
 
 IDs are the lowercase PocketDecks v5 IDs, NOT the display-style P-A-005.
 These are community consensus samples; they are not a particular tournament winner.
@@ -128,6 +128,132 @@ DECKS = {
             'pa-005': 1, 'c1-127': 1, 'pa-002': 1,
         },
     },
+    # Four representative 20-card lists from the Nov 8, 2026 tournament snapshot.
+    # The references provide card numbers and quantities; the actual remote
+    # gameplay catalog still decides whether a deck is eligible for simulation.
+    'mega_manectric_heliolisk': {
+        'name': 'Mega Manectric ex / Heliolisk',
+        'energy_types': ['lightning'],
+        'source': 'https://pocket.pokemongohub.net/en/decks/meta/mega-manectric-ex-heliolisk',
+        'source_checked': '2026-11-16', 'sample_through': '2026-11-08',
+        'description': 'Lista representativa de torneio; Clemont e acessórios exigem auditoria antes do duelo.',
+        'release_stage': 'catalog_only',
+        'cards': {
+            'b1a-028':2, 'b4-061':2, 'b2b-026':1, 'b2b-027':2,
+            'b1a-068':2, 'pa-007':2, 'b1-225':1, 'a2-150':1,
+            'a1-225':1, 'pa-005':2, 'b1a-066':2,
+            'b3b-065':1, 'b2-153':1,
+        },
+    },
+    'mega_lucario_lucario': {
+        'name': 'Mega Lucario ex / Lucario',
+        'energy_types': ['fighting'],
+        'source': 'https://pocket.pokemongohub.net/en/decks/meta/mega-lucario-ex-lucario',
+        'source_checked': '2026-11-16', 'sample_through': '2026-11-08',
+        'description': 'Lista representativa de torneio; efeitos de Korrina e do estádio exigem auditoria.',
+        'release_stage': 'catalog_only',
+        'cards': {
+            'b3-079':2, 'b3-081':2, 'a2-092':1, 'a1-154':1,
+            'b3-078':1, 'pa-007':2, 'b1-225':2, 'a2-150':1,
+            'a2b-070':1, 'b3-149':1, 'pa-005':2, 'pa-002':1,
+            'b3-147':1, 'b2-145':1, 'b3-154':1,
+        },
+    },
+    'giratina_dragonair': {
+        'name': 'Giratina ex / Dragonair',
+        'energy_types': ['grass', 'psychic'],
+        'source': 'https://pocket.pokemongohub.net/en/decks/meta/giratina-ex-dragonair',
+        'source_checked': '2026-11-16', 'sample_through': '2026-11-08',
+        'description': 'Lista representativa; Energy Zone multicolorida não foi validada no motor.',
+        'release_stage': 'catalog_only',
+        'simulation_blocked_reason': 'A combinação de energias Planta/Psíquica requer validar a geração da Energy Zone.',
+        'cards': {
+            'c1-098':2, 'b4-117':2, 'c1-101':2, 'b4-124':1,
+            'b1-225':2, 'pa-007':2, 'a1-225':1, 'a2b-070':1,
+            'c1-127':1, 'pa-005':2, 'b3-147':1,
+            'c1-123':1, 'b4-155':2,
+        },
+    },
+    'vespiquen_shuckle': {
+        'name': 'Vespiquen ex / Shuckle ex',
+        'energy_types': ['grass'],
+        'source': 'https://pocket.pokemongohub.net/en/decks/meta/vespiquen-ex-shuckle-ex',
+        'source_checked': '2026-11-16', 'sample_through': '2026-11-08',
+        'description': 'Lista representativa; Leaf Cape e Fragrant Forest precisam de compatibilidade confirmada.',
+        'release_stage': 'catalog_only',
+        'cards': {
+            'b4-010':2, 'b4-011':2, 'a4-021':2, 'b2-017':1,
+            'b1-225':2, 'pa-007':2, 'a2-150':1, 'a1-225':1,
+            'pa-002':2, 'b3-147':1, 'a3-147':2, 'b3-153':2,
+        },
+    },
+
+    # Additional verified 20-card tournament samples (Nov 8 snapshot).
+    # Library-only until mechanics can be verified; no new effect handlers.
+    'greninja_ex_mega_greninja': {
+        'name': 'Mega Greninja ex / Greninja ex',
+        'energy_types': ['water'],
+        'source': 'https://pocket.pokemongohub.net/en/decks/meta/greninja-ex-mega-greninja-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Lista completa de torneio; importação disponível, duelo depende de auditoria do motor.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista cadastrada; ataques e efeitos ainda aguardam auditoria de compatibilidade.',
+        'cards':{'b1-071':2,'c1-041':2,'a1-089':2,'b1-073':1,
+                 'c1-042':1,'a4a-020':2,'pa-007':2,'b1-225':2,
+                 'a2-150':1,'pa-005':2,'a3-144':1,'b3-147':1,'a4a-067':1},
+    },
+    'mega_mewtwo_x_mew': {
+        'name':'Mega Mewtwo X ex / Mew ex',
+        'energy_types':['psychic'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/mega-mewtwo-x-ex-mew-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Lista completa de torneio; mantém suporte técnico bloqueado até auditar os efeitos.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista cadastrada; ataques e efeitos ainda aguardam auditoria de compatibilidade.',
+        'cards':{'c1-057':2,'c1-056':2,'b3b-035':1,
+                 'pa-007':2,'b3-149':1,'b1-225':1,'a2-150':1,
+                 'a1-225':1,'a2-155':1,'pa-005':2,'b3-147':1,
+                 'c1-123':2,'b2-155':2,'b3-154':1},
+    },
+    'hydreigon_mega_absol': {
+        'name':'Hydreigon / Mega Absol ex',
+        'energy_types':['darkness'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/hydreigon-mega-absol-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-10-27',
+        'description':'Lista de torneio da janela de outubro; ainda não auditada na Arena.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista cadastrada; ataques e efeitos ainda aguardam auditoria de compatibilidade.',
+        'cards':{'b1-155':2,'b1-157':2,'b3-115':1,'b1-151':1,
+                 'pa-007':2,'b1-225':2,'a2-150':1,'a1-225':1,
+                 'pa-005':2,'a3-144':2,'b2-145':2,'b4-148':2},
+    },
+    'mega_greninja_suicune': {
+        'name':'Mega Greninja ex / Suicune ex',
+        'energy_types':['water'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/mega-greninja-ex-suicune-ex',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Lista completa de torneio; nova evolução e ferramentas aguardam auditoria.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista cadastrada; ataques e efeitos ainda aguardam auditoria de compatibilidade.',
+        'cards':{'c1-040':2,'c1-041':2,'a1-089':2,'c1-042':1,
+                 'a4a-020':2,'pa-007':2,'b1-223':1,'b1-225':1,
+                 'a2-150':1,'pa-005':2,'a3-144':1,'a4a-067':1,
+                 'a2-147':1,'b4-154':1},
+    },
+    'mega_sceptile_greninja': {
+        'name':'Mega Sceptile ex / Greninja',
+        'energy_types':['grass'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/mega-sceptile-ex-greninja',
+        'source_checked':'2026-11-16','sample_through':'2026-11-08',
+        'description':'Lista completa de torneio; Water Shuriken não requer Água, mas outras mecânicas aguardam auditoria.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Lista cadastrada; ataques e efeitos ainda aguardam auditoria de compatibilidade.',
+        'cards':{'b3-005':2,'b3-006':1,'b3-008':2,
+                 'a1-087':1,'a1-089':1,'a3a-007':1,'b3b-061':1,
+                 'c1-127':2,'pa-007':2,'b1-225':1,'a2-150':1,
+                 'pa-005':2,'a3-144':2,'b3b-064':1},
+    },
+
 }
 
 

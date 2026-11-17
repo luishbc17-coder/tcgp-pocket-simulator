@@ -15,7 +15,7 @@ from batch_runner import run_technical_batch
 from gameplay_catalog import evolution_line_map
 
 MAX_GAMES_PER_OPPONENT = 250
-MAX_TOTAL_GAMES = 2500
+MAX_TOTAL_GAMES = 3000
 
 
 def build_gauntlet_plan(player_payload: dict, opponents: dict[str, dict],
@@ -24,12 +24,20 @@ def build_gauntlet_plan(player_payload: dict, opponents: dict[str, dict],
     """Return annotated opponents; no game execution, no invented outcomes."""
     player = inspect_deck(player_payload, core, gameplay)
     player_identity = describe_selection(player_payload, 'Meu deck')
+    from meta_decks import DECKS
+    player_slug = player_identity.get('recognized_preset')
+    player_block = (player_payload.get('simulation_blocked_reason') or
+                    DECKS.get(player_slug,{}).get('simulation_blocked_reason',''))
     rows = []
     for slug, deck in opponents.items():
         opponent = inspect_deck(deck, core, gameplay)
         comparison = compare_decks(player_identity, describe_selection(deck, deck.get('name', slug)))
         mirror = comparison['is_mirror']
         reasons = []
+        if player_block:
+            reasons.append('Seu deck: '+player_block)
+        if deck.get('simulation_blocked_reason'):
+            reasons.append(deck['simulation_blocked_reason'])
         if not player['technical_demo_ready']:
             reasons.append('Seu deck não está completamente suportado pelo motor')
         if not opponent['technical_demo_ready']:
@@ -67,7 +75,7 @@ def run_meta_gauntlet(player_payload: dict, opponents: dict[str, dict],
         raise ValueError(f'Partidas por adversário devem ser 1–{MAX_GAMES_PER_OPPONENT}')
     if type(seed) is not int or seed < 0:
         raise ValueError('Semente deve ser um inteiro não negativo')
-    if agent_mode not in ('baseline', 'tactical'):
+    if agent_mode not in ('baseline', 'tactical', 'strategic'):
         raise ValueError('Política de IA inválida')
     if games_per_opponent * len(opponents) > MAX_TOTAL_GAMES:
         raise ValueError(f'Limite: {MAX_TOTAL_GAMES} partidas por execução')

@@ -1,4 +1,4 @@
-"""Audited, bounded round-robin meta matrix for TCG Pocket Lab v0.9.4.
+"""Audited, bounded round-robin meta matrix for TCG Pocket Lab v0.9.5.
 
 Every unordered pair appears once. Results are technical heuristics rather
 than metagame probabilities. A pair failing compatibility or auditing never
@@ -16,9 +16,9 @@ from batch_runner import run_technical_batch
 from gameplay_catalog import evolution_line_map
 from meta_decks import DECKS as REGISTERED_DECKS
 
-MAX_MATRIX_DECKS = 7
+MAX_MATRIX_DECKS = 16
 MAX_GAMES_PER_PAIR = 100
-MAX_TOTAL_MATRIX_GAMES = 2100
+MAX_TOTAL_MATRIX_GAMES = 2500
 
 
 def build_matrix_plan(presets: dict[str, dict], core: list[dict],
@@ -33,13 +33,15 @@ def build_matrix_plan(presets: dict[str, dict], core: list[dict],
         identity = describe_selection(deck, deck.get('name', slug))
         signatures[slug] = identity['signature']
         reasons = list(diag['issues'])
+        if deck.get('simulation_blocked_reason'):
+            reasons.append(deck['simulation_blocked_reason'])
         reasons.extend(f"{card['name']}: {card['reason']}"
                        for card in diag['cards'] if card['status'] == 'bloqueada')
         rows.append({'slug':slug, 'name':deck.get('name',slug),
                      'signature':identity['signature'],
                      'energy_types':list(deck.get('energy_types', [])),
                      'supported':diag['supported'], 'total':diag['total'],
-                     'ready':bool(diag['technical_demo_ready']),
+                     'ready':bool(diag['technical_demo_ready']) and not bool(deck.get('simulation_blocked_reason')), 
                      'reasons':reasons[:12]})
     lookup = {r['slug']: r for r in rows}
     pairs = []
@@ -132,7 +134,7 @@ def run_meta_matrix(presets: dict[str, dict], core: list[dict],
         raise ValueError(f'Partidas por confronto devem ser 1–{MAX_GAMES_PER_PAIR}')
     if type(seed) is not int or seed < 0:
         raise ValueError('Semente deve ser um inteiro não negativo')
-    if agent_mode not in ('baseline', 'tactical'):
+    if agent_mode not in ('baseline', 'tactical', 'strategic'):
         raise ValueError('Política de IA inválida')
     plan = build_matrix_plan(presets, core, gameplay)
     if plan['total_pairs'] * games_per_pair > MAX_TOTAL_MATRIX_GAMES:
@@ -153,7 +155,13 @@ def run_meta_matrix(presets: dict[str, dict], core: list[dict],
         # A unique stable offset for every distinct pair. Does not depend on
         # whether preceding pairs were blocked.
         i, j = sorted((i,j))
-        pair_seed = seed + (i * max(MAX_MATRIX_DECKS,len(slugs)) + j) * (MAX_GAMES_PER_PAIR + 1)
+        # Preserve v0.9.4 seeds for the original seven decks. Adding four
+        # archetypes must not silently change the replay of an old matchup.
+        # New pairs use a disjoint offset space, independent of chosen subset.
+        slot = (i * 7 + j if j < 7 else
+                49 + i * 11 + j if j < 11 else
+                512 + i * 32 + j)
+        pair_seed = seed + slot * (MAX_GAMES_PER_PAIR + 1)
         left = presets[pair['left_slug']]
         right = presets[pair['right_slug']]
         try:
@@ -195,7 +203,7 @@ def run_meta_matrix(presets: dict[str, dict], core: list[dict],
             progress(completed_before, total)
     summary = summarize_matrix(plan, results)
     return {
-        'kind':'technical_meta_matrix', 'version':'0.9.4',
+        'kind':'technical_meta_matrix', 'version':'0.9.6',
         'validated_competitive':False,
         'disclaimer':('Resultados de IA heurística em motor parcial, com mesmo peso por adversário; '
                       'não são probabilidades reais do metagame nem ranking oficial.'),
