@@ -14,13 +14,13 @@ from battle_engine import Card, RuleAgent, RuleError, UnsupportedEffect, validat
 from batch_runner import verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgent, StrategicAgentV097
-from planning_agent import PlanningAgentV098, PlanningAgentV099
+from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910
 from battle_metrics import count_logged_actions, new_telemetry, serialize_telemetry
 from matrix_insights import score_interval
 from duel_insights import duel_efficiency
 
 POLICIES = {'baseline':RuleAgent, 'tactical':TacticalAgent,
-            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
+            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
 MAX_HEAD_TO_HEAD_GAMES = 400
 
 
@@ -117,7 +117,7 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
     ci=score_interval(wins['a'],wins['b'],wins['draw']) if complete else None
     scenario_intervals = {key:score_interval(value['a'],value['b'],value['draw'])
                           for key,value in sides.items()} if complete else None
-    return {'kind':'technical_policy_duel','version':'0.9.9','validated_competitive':False,
+    return {'kind':'technical_policy_duel','version':'0.9.10','validated_competitive':False,
             'disclaimer':'Benchmark de políticas heurísticas com baralho espelhado, não prova de força contra humanos ou no meta.',
             'policy_a':policy_a,'policy_b':policy_b,'seed':seed,
             'deck_name':deck_name or 'Baralho espelhado (nome não informado)',

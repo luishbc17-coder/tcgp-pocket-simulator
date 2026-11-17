@@ -545,3 +545,273 @@ class PlanningAgentV099(PlanningAgentV098):
         self._note('retreat',best['name'],options,
                    'Preserva atacante; o custo do recuo já foi descontado e exige margem adicional de 20')
         return p.all_in_play()[best['index']] if 'index' in best else None
+
+
+class PlanningAgentV0910(PlanningAgentV099):
+    """v0.9.10: public, bounded 2-turn projection with known Rare Candy,
+    supported-ability option value, useful energy preparation and unique audit IDs.
+
+    This is a *heuristic*, not a full rollout of the opponent turn; hidden
+    decks/hands or hypothetical future draws are never accessed or invented.
+    """
+    policy_name = 'planning_v0910'
+    MAX_PROJECTED_ABILITY_BONUS = 55.0
+    MAX_PREPARATION_BONUS = 25.0
+
+    def _known_evolutions(self, mon: InPlay, player: Player):
+        """(card, method) legal on next own turn from the current hand only.
+
+        The previous card must survive and still be present. Item lock is not
+        assumed to persist across turns, but Candy remains discounted for that
+        uncertainty. Stage 2 cannot be reached through two ordinary evolutions
+        in a single future turn.
+        """
+        options = [(mon.card, 'none')]
+        if player.turns_taken + 1 < 2:
+            return options
+        own_candy = any(c.effect == 'rare_candy' for c in player.hand)
+        for card in player.hand:
+            if card.kind != 'pokemon':
+                continue
+            if (card.stage == mon.card.stage + 1 and
+                card.evolves_from.casefold() == mon.card.name.casefold()):
+                options.append((card, 'regular'))
+            elif (mon.card.stage == 0 and card.stage == 2 and own_candy
+                  and self.line_map.get(card.evolves_from.casefold(), '').casefold()
+                  == mon.card.name.casefold()):
+                options.append((card, 'rare_candy'))
+        return options
+
+    @staticmethod
+    def _energy_shortfall(mon: InPlay, attack: Attack, zone: str) -> int:
+        """Smallest number of *zone-type* attachments to pay the attack."""
+        required = Counter(t for t in attack.cost if t != 'colorless')
+        present = Counter(mon.energy)
+        if any(present[t] < n for t,n in required.items() if t != zone):
+            return 99
+        colored = max(0, required.get(zone,0)-present[zone])
+        total = max(0, len(attack.cost)-len(mon.energy))
+        return max(total,colored)
+
+    def _future_support_bonus(self, own: list[InPlay], enemy: InPlay, player: Player, zone: str):
+        """Value *existing implemented* support abilities after opponent reply.
+
+        Avoids pretending an ability happened or drawing from hidden zones;
+        capability is an option value, discounted because actual use/survival
+        next turn is uncertain. Bonus is counted once for the whole board.
+        """
+        if enemy.damage >= enemy.max_hp:
+            return 0.0, []
+        bonuses=[]
+        rare_candy_left=sum(c.effect=='rare_candy' for c in player.hand)
+        for mon in own:
+            if mon.damage>=mon.max_hp:
+                continue
+            options=self._known_evolutions(mon, player)
+            highest=(0.0,None)
+            for evolution,method in options:
+                ability=evolution.ability
+                if ability=='water_shuriken':
+                    dmg=min(20,max(0,enemy.max_hp-enemy.damage))
+                    val=0.75*dmg + (55 if dmg>0 and enemy.max_hp-enemy.damage<=20 else 0)
+                elif ability=='volt_charge' and zone=='lightning':
+                    val=16
+                elif ability=='ice_maker' and zone=='water' and any(m.card.element=='water' for m in own):
+                    val=18
+                elif ability=='roar_in_unison' and zone=='darkness' and mon.max_hp-mon.damage>30:
+                    val=16
+                else:
+                    val=0.0
+                if method=='rare_candy' and not rare_candy_left:
+                    val=0
+                if method!='none':
+                    val*=0.77 if method=='regular' else 0.63
+                # A vulnerable support Pokemon may not survive; bench cards
+                # are less exposed than a face-up active attacker.
+                if mon is own[0] and mon.max_hp-mon.damage<=50:
+                    val*=0.55
+                if val>highest[0]:
+                    highest=(val, (evolution.name,ability,method))
+            if highest[0] > 0:
+                bonuses.append(highest)
+        # One ability per unique Pokemon remains possible; cap to prevent
+        # utility inflation from repeated identical Support cards.
+        bonuses.sort(reverse=True,key=lambda x:x[0])
+        selected=bonuses[:2]
+        return min(self.MAX_PROJECTED_ABILITY_BONUS,sum(x[0] for x in selected)), [x[1] for x in selected]
+
+    def _future_best(self, own, active_idx, enemy, player, zone,
+                     enemy_reply_damage, enemy_ko):
+        if enemy.max_hp <= enemy.damage:
+            return {'score':0.0,'attack':'alvo nocauteado','pokemon':'—',
+                    'ability_options':[], 'evolution_in_hand':False}
+        candidates=[]
+        for idx,original in enumerate(own[:self.MAX_OWN_BRANCHES]):
+            if idx==active_idx and enemy_ko:
+                continue
+            if original.damage>=original.max_hp:
+                continue
+            retreat_cost=0
+            if idx!=active_idx and not enemy_ko:
+                retreat_cost=self._retreat_cost(own[active_idx])
+                if len(own[active_idx].energy)<retreat_cost:
+                    # Cannot claim a bench attack if retreat cannot be paid.
+                    continue
+            for evo,method in self._known_evolutions(original, player):
+                for attach in (False,True):
+                    mon=self._clone(original)
+                    mon.card=evo
+                    if mon.max_hp <= mon.damage:
+                        continue
+                    if attach:
+                        mon.energy.append(zone)
+                    for attack in mon.card.attacks:
+                        if not self._payable(mon,attack):
+                            continue
+                        _,raw,ko=self._attack_effect_value(mon,enemy,attack,len(own)-1)
+                        cost=(self.RETREAT_PENALTY+17*retreat_cost) if idx!=active_idx and not enemy_ko else 0
+                        value=raw-cost-(3 if attach else 0)
+                        if method=='regular': value-=8
+                        elif method=='rare_candy': value-=15 # requires both cards in hand and an unlocked item
+                        if enemy_ko: value-=6
+                        candidates.append({'score':round(value,3),'attack':attack.name,
+                            'pokemon':evo.name,'attacher':original.card.name if attach else None,
+                            'evolution_in_hand':method!='none','evolution_method':method,
+                            'requires_switch':idx!=active_idx and not enemy_ko,
+                            'retreat_energy_paid':retreat_cost,'future_attachment':attach,
+                            'projected_ko':ko})
+        support,sources=self._future_support_bonus(own,enemy,player,zone)
+        if not candidates:
+            # Even without a payable attack, next-turn abilities can still
+            # matter. Do not invent an attack in these states.
+            return {'score':round(support,3),'attack':'nenhum ataque legal alcançável',
+                    'pokemon':'—','evolution_in_hand':False,
+                    'ability_options':sources,'projected_ability_value':round(support,3)}
+        best=max(candidates,key=lambda row:row['score'])
+        return {**best,'score':round(best['score']+support,3),
+                'ability_options':sources,'projected_ability_value':round(support,3)}
+
+    def _preparation_value(self, player:Player, target_idx:int|None)->tuple[float,str]:
+        """Only reward energy that reduces shortfall on a *known* reachable line.
+
+        This small residual protects setup from looking identical to doing
+        nothing when the 2-turn horizon ends before an evolution can attack.
+        """
+        if target_idx is None:
+            return 0.0,'sem anexo'
+        mons=player.all_in_play()
+        if not 0<=target_idx<len(mons) or len(player.energy_types)!=1:
+            return 0.0,'fora do campo'
+        mon=mons[target_idx]
+        if mon.damage>=mon.max_hp:
+            return 0.0,'nocauteado'
+        zone=player.energy_types[0]
+        baseline=self._clone(mon)
+        additional=self._clone(mon);additional.energy.append(zone)
+        best=0.0; best_reason='nenhum ataque novo aproximado'
+        for evo,method in self._known_evolutions(mon,player):
+            if not evo.attacks:
+                continue
+            before=self._clone(baseline);before.card=evo
+            after=self._clone(additional);after.card=evo
+            for attack in evo.attacks:
+                old=self._energy_shortfall(before,attack,zone)
+                new=self._energy_shortfall(after,attack,zone)
+                if old==99 or new>=old or old>3:
+                    continue
+                # Near a real payable attack, the attachment has more value.
+                score={0:22,1:17,2:10,3:3}.get(new,0)
+                if method=='rare_candy':score*=0.82
+                if method=='regular':score*=0.9
+                if target_idx==0 and mon.max_hp-mon.damage<=60:
+                    score*=0.62
+                if score>best:
+                    best=score;best_reason=f'{evo.name}: {attack.name} ({old}→{new} energias)'
+        return round(min(self.MAX_PREPARATION_BONUS,best),3),best_reason
+
+    def _note(self,decision,chosen,alternatives,reason):
+        """Match by stable action ID/board slot, NEVER Pokémon display name."""
+        if len(self.decision_records)>=50:
+            return
+        normalized=[]
+        for i,row in enumerate(alternatives):
+            item=dict(row)
+            item.setdefault('choice_id',f'{decision}:action:{i}')
+            item.setdefault('label',item.get('name','ação'))
+            normalized.append(item)
+        if isinstance(chosen,dict):
+            selected_id=chosen['choice_id']
+            selected_label=chosen.get('label',chosen.get('name','ação'))
+        else:
+            selected_label=chosen
+            match=next((r for r in normalized if r['name']==chosen),None)
+            selected_id=match['choice_id'] if match else None
+        chosen_row=next((r for r in normalized if r['choice_id']==selected_id),None)
+        chosen_score=chosen_row['score'] if chosen_row else None
+        for row in normalized:
+            row['delta_vs_chosen']=(round(row['score']-chosen_score,3)
+                if chosen_score is not None else None)
+            row['counterfactual_kind']='estimativa_no_mesmo_estado'
+        rejected=[row for row in normalized if row['choice_id']!=selected_id]
+        runner=max((r['score'] for r in rejected),default=None)
+        self.decision_records.append({'turn':self._context_battle.turn if self._context_battle is not None else None,
+            'player':self._context_battle.current if self._context_battle is not None else None,
+            'decision':decision,'chosen':selected_label,'chosen_id':selected_id,
+            'alternatives':sorted(normalized,key=lambda row:(-row['score'],row['choice_id']))[:6],
+            'reason':reason,'chosen_projected_score':chosen_score,
+            'best_rejected_projected_score':runner,
+            'projected_margin':round(chosen_score-runner,3) if chosen_score is not None and runner is not None else None,
+            'audit_limitations':'Comparação heurística entre ações; não é resultado causal de partidas contrafactuais.'})
+
+    def select_energy_target(self,player):
+        battle=self._context_battle
+        if battle is None or len(player.energy_types)!=1:
+            return super().select_energy_target(player)
+        foe=battle.players[1-battle.current]
+        if not player.active or not foe.active:
+            return super().select_energy_target(player)
+        baseline=self._path(player,foe)
+        options=[{'name':'não anexar','label':'não anexar','choice_id':'energy:none',
+                  'score':baseline['score'],'current_attack':baseline['current'],
+                  'next_attack':baseline['next'],'incoming_risk':baseline['risk']}]
+        for idx,mon in enumerate(player.all_in_play()[:self.MAX_OWN_BRANCHES]):
+            if mon.max_hp<=mon.damage:continue
+            path=self._path(player,foe,target_idx=idx)
+            progress,reason=self._preparation_value(player,idx)
+            # A useful attachment deserves credit; unneeded excess energy not.
+            immediate=any(not self._payable(mon,a) and self._can_reach(mon,a,player.energy_types[0],1)
+                          for a in mon.card.attacks)
+            surplus=not immediate and progress==0 and len(mon.energy)>=2
+            score=round(path['score']+progress*0.8+(6 if immediate and idx==0 else 0)
+                        -(11 if surplus else 0),3)
+            slot='Ativo' if idx==0 else f'Banco {idx}'
+            options.append({'name':mon.card.name,'label':f'{mon.card.name} [{slot}]',
+                'choice_id':f'energy:slot:{idx}','index':idx,'score':score,
+                'current_attack':path['current'],'next_attack':path['next'],
+                'incoming_risk':path['risk'],'enemy_response':path['response'],
+                'preparation_bonus':round(progress*0.8,3),'preparation_reason':reason,
+                'improvement_vs_no_attachment':round(path['score']-baseline['score'],3),
+                'enables_attack_immediately':immediate})
+        chosen=max(options,key=lambda x:(x['score'],-x.get('index',99)))
+        if chosen['choice_id']!='energy:none' and chosen['score']<=baseline['score']+1.5:
+            chosen=options[0]
+        self._note('energy',chosen,options,
+          'Dois turnos, evolução conhecida/Rare Candy, habilidade suportada, preparo de energia e custo de oportunidade')
+        return player.all_in_play()[chosen['index']] if 'index' in chosen else None
+
+    def _retreat_option(self,battle):
+        p=battle.players[battle.current];foe=battle.players[1-battle.current]
+        if not p.active or not foe.active or not p.bench or p.retreated:return None
+        stay=self._path(p,foe,fixed_active_idx=0)
+        options=[{'name':'manter ativo','label':'manter '+p.active.card.name,
+                  'choice_id':'retreat:stay','score':stay['score'],'feasible':True}]
+        for idx,mon in enumerate(p.all_in_play()[1:self.MAX_OWN_BRANCHES],start=1):
+            result=self._path(p,foe,fixed_active_idx=idx)
+            options.append({'name':mon.card.name,'label':f'{mon.card.name} [Banco {idx}]',
+                   'choice_id':f'retreat:slot:{idx}','index':idx,'score':result['score'],
+                   'feasible':result['score']>-1e5,
+                   'reason':result['current'] if result['score']>-1e5 else 'recuo inviável'})
+        viable=[row for row in options[1:] if row['feasible'] and row['score']>stay['score']+24]
+        chosen=max(viable,key=lambda x:x['score']) if viable else options[0]
+        self._note('retreat',chosen,options,'Recuo legal, identificador de slot e margem mínima de 24 pontos')
+        return p.all_in_play()[chosen['index']] if 'index' in chosen else None
