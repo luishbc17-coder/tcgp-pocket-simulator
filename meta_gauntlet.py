@@ -75,12 +75,12 @@ def run_meta_gauntlet(player_payload: dict, opponents: dict[str, dict],
         raise ValueError(f'Partidas por adversário devem ser 1–{MAX_GAMES_PER_OPPONENT}')
     if type(seed) is not int or seed < 0:
         raise ValueError('Semente deve ser um inteiro não negativo')
-    if agent_mode not in ('baseline', 'tactical', 'strategic'):
+    if agent_mode not in ('baseline', 'tactical', 'strategic', 'planning'):
         raise ValueError('Política de IA inválida')
-    if games_per_opponent * len(opponents) > MAX_TOTAL_GAMES:
-        raise ValueError(f'Limite: {MAX_TOTAL_GAMES} partidas por execução')
     plan = build_gauntlet_plan(player_payload, opponents, core, gameplay, include_mirror)
     runnable = [r for r in plan['opponents'] if r['status'] == 'ready']
+    if games_per_opponent * len(runnable) > MAX_TOTAL_GAMES:
+        raise ValueError(f'Limite: {MAX_TOTAL_GAMES} partidas realmente executáveis por operação')
     total = len(runnable) * games_per_opponent
     result = []
     totals = Counter()

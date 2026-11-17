@@ -14,11 +14,13 @@ from battle_engine import Card, RuleAgent, RuleError, UnsupportedEffect, validat
 from batch_runner import verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgent, StrategicAgentV097
+from planning_agent import PlanningAgentV098
 from battle_metrics import count_logged_actions, new_telemetry, serialize_telemetry
 from matrix_insights import score_interval
+from duel_insights import duel_efficiency
 
 POLICIES = {'baseline':RuleAgent, 'tactical':TacticalAgent,
-            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent}
+            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV098}
 MAX_HEAD_TO_HEAD_GAMES = 400
 
 
@@ -74,6 +76,8 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
                 telemetry[key]['counts'].update(stats[side]['counts'])
                 telemetry[key]['attacks_by_name'].update(stats[side]['attacks_by_name'])
                 telemetry[key]['trainers_by_name'].update(stats[side]['trainers_by_name'])
+                for field in ('attacks_by_pokemon','reported_damage_by_pokemon','reported_damage_by_attack'):
+                    telemetry[key][field].update(stats[side][field])
             # Structured decisions contain only own-public and public-board facts.
             for label, agent in zip(('a','b'),agents):
                 notes = getattr(agent, 'decision_records', [])
@@ -81,6 +85,19 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
                 if idx < 4:  # bounded examples; do not multiply JSON size by games
                     decision_samples.extend({'round':idx+1,'policy':label,**row}
                                             for row in notes[:12])
+            # The unmodified reference agents expose no internal decision
+            # scores. Preserve observed logs symmetrically, without inventing
+            # a score or intention for those policies.
+            if idx < 4:
+                for event in battle.log:
+                    if len(decision_samples) >= 80: break
+                    if event.startswith(('P0 ','P1 ')) and (' uses ' in event or
+                           ' retreats into ' in event or 'manual energy:' in event):
+                        side=int(event[1]); label='a' if side==a_side else 'b'
+                        if not getattr(agents[0 if label=='a' else 1], 'decision_records',None):
+                            decision_samples.append({'round':idx+1,'policy':label,
+                               'decision':'observed_action','observed_event':event,
+                               'reason':'A política não expõe pontuação interna nesta versão'})
             rounds.append({'round':idx+1,'seed':effective_seed+idx,'a_side':a_side,
                            'first_player':first,'winner':battle.winner,
                            'outcome':outcome,'half_turns':battle.turn})
@@ -100,7 +117,7 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
     ci=score_interval(wins['a'],wins['b'],wins['draw']) if complete else None
     scenario_intervals = {key:score_interval(value['a'],value['b'],value['draw'])
                           for key,value in sides.items()} if complete else None
-    return {'kind':'technical_policy_duel','version':'0.9.7','validated_competitive':False,
+    return {'kind':'technical_policy_duel','version':'0.9.8','validated_competitive':False,
             'disclaimer':'Benchmark de políticas heurísticas com baralho espelhado, não prova de força contra humanos ou no meta.',
             'policy_a':policy_a,'policy_b':policy_b,'seed':seed,
             'deck_name':deck_name or 'Baralho espelhado (nome não informado)',
@@ -116,7 +133,12 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
             'rounds':rounds,'checked_actions':total_checked,
             'average_half_turns':round(total_turns/completed,2) if completed else None,
             'telemetry':serialize_telemetry(telemetry),
-            'decision_audit':{'counts':{k:dict(v) for k,v in decision_counts.items()},
+            'efficiency':duel_efficiency(serialize_telemetry(telemetry)),
+            'attacker_efficiency_note':'Dano reportado é nominal do evento de ataque; não equivale necessariamente a dano efetivo, e nocautes/pontos não são atribuídos individualmente a Pokémon.',
+            'decision_audit':{'coverage':{
+                     'a':'structured' if hasattr(POLICIES[policy_a], '_note') else 'observed_only',
+                     'b':'structured' if hasattr(POLICIES[policy_b], '_note') else 'observed_only'},
+                     'counts':{k:dict(v) for k,v in decision_counts.items()},
                               'examples':decision_samples[:80]},
             'second_player_advantage':{
                 'a_second':{k:sides['b_first'][k] for k in ('a','b','draw')},

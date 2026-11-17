@@ -1,4 +1,4 @@
-"""Dated 20-card consensus sample lists for TWENTY-ONE Pocket archetypes (2026-11-16).
+"""Dated 20-card consensus sample lists for TWENTY-SIX Pocket archetypes (2026-11-16).
 
 IDs are the lowercase PocketDecks v5 IDs, NOT the display-style P-A-005.
 These are community consensus samples; they are not a particular tournament winner.
@@ -315,6 +315,62 @@ DECKS = {
         'cards':{'b1-184':2,'c1-084':2,'b1-151':2,'b3b-041':1,
                  'b1-225':2,'pa-007':2,'a2-154':1,'a1-225':1,
                  'a2-150':1,'pa-005':2,'pa-002':2,'b4-148':2},
+    },
+    # v0.9.8: five source-backed, 20-card lists; catalog-only, no engine effects.
+    'umbreon_mega_sableye': {
+        'name':'Umbreon / Mega Sableye ex', 'energy_types':['darkness'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/umbreon-mega-sableye-ex',
+        'source_checked':'2026-11-17','sample_through':'2026-11-08',
+        'description':'Lista completa de torneio com Umbreon, Mega Sableye e Mega Absol.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Pendências de ataques e efeitos ainda não auditadas.',
+        'cards':{'b1-184':2,'c1-084':2,'b1-151':1,'b3b-041':1,'b3-115':1,
+                 'pa-007':2,'b1-225':2,'a1-225':1,'a2b-070':1,'b1-223':1,
+                 'pa-005':2,'b2-145':2,'b4-148':2},
+    },
+    'raikou_pawmot': {
+        'name':'Raikou ex / Pawmot', 'energy_types':['lightning'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/raikou-ex-pawmot',
+        'source_checked':'2026-11-17','sample_through':'2026-11-08',
+        'description':'Lista completa de torneio de Raikou ex e Pawmot.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Pendências de ataques e efeitos ainda não auditadas.',
+        'cards':{'c1-048':2,'c1-050':2,'a4a-025':2,'c1-043':1,'pa-007':2,
+                 'a2-150':1,'c1-127':1,'b1-225':1,'a3-144':2,'pa-005':2,
+                 'b3-147':1,'c1-123':2,'c1-124':1},
+    },
+    'mega_blaziken_greninja': {
+        'name':'Mega Blaziken ex / Greninja', 'energy_types':['fire'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/mega-blaziken-ex-greninja',
+        'source_checked':'2026-11-17','sample_through':'2026-10-27',
+        'description':'Lista completa de torneio; Greninja auxilia com Water Shuriken.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Pendências de ataques e efeitos ainda não auditadas.',
+        'cards':{'b1-033':2,'b1-034':1,'b1-036':2,'a1-087':1,'a1-089':1,
+                 'b1-044':1,'b3-024':1,'pa-007':2,'b1-225':2,'a2-150':1,
+                 'pa-005':2,'a3-144':2,'b1-217':1,'b2b-069':1},
+    },
+    'hydreigon_mega_sableye': {
+        'name':'Hydreigon / Mega Sableye ex', 'energy_types':['darkness'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/hydreigon-mega-sableye-ex',
+        'source_checked':'2026-11-17','sample_through':'2026-09-29',
+        'description':'Lista completa histórica de torneio com dois atacantes de Trevas.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Pendências de ataques e efeitos ainda não auditadas.',
+        'cards':{'b1-155':2,'b1-157':2,'b1-151':1,'b3b-041':1,'b3-115':1,
+                 'pa-007':2,'b1-225':2,'a2-150':1,'pa-005':2,'a3-144':2,
+                 'a3a-064':1,'b2-145':1,'b3-147':1,'b4-148':1},
+    },
+    'hoopa_greninja': {
+        'name':'Hoopa ex / Greninja', 'energy_types':['darkness'],
+        'source':'https://pocket.pokemongohub.net/en/decks/meta/hoopa-ex-greninja',
+        'source_checked':'2026-11-17','sample_through':'2026-09-07',
+        'description':'Lista histórica completa; Greninja oferece dano pelo banco.',
+        'release_stage':'catalog_only',
+        'simulation_blocked_reason':'Pendências de ataques e efeitos ainda não auditadas.',
+        'cards':{'a1-087':2,'a1-089':2,'b4-103':2,'b3b-041':1,'pa-007':2,
+                 'b1-225':2,'a2-150':1,'pa-005':2,'a3-144':2,
+                 'pa-002':2,'b4-148':2},
     },
 
 }

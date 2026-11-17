@@ -8,6 +8,7 @@ from collections import Counter
 import re
 
 ATTACK = re.compile(r'^P([01]) (.+?) uses (.+?), (\d+) damage')
+DIVING = re.compile(r'^P([01]) (.+?) Diving Icicles: discards')
 TRAINER = re.compile(r'^P([01]) plays (.+)$')
 ENERGY = re.compile(r'^P([01]) ([^:]+): \+1 (grass|fire|water|lightning|psychic|fighting|darkness|metal|colorless) to ')
 TURN = re.compile(r'^Turn \d+, P([01])$')
@@ -19,6 +20,9 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
     stats = {0: Counter(), 1: Counter()}
     attacks = {0: Counter(), 1: Counter()}
     trainers = {0: Counter(), 1: Counter()}
+    attacks_by_pokemon={0:Counter(),1:Counter()}
+    damage_by_pokemon={0:Counter(),1:Counter()}
+    damage_by_attack={0:Counter(),1:Counter()}
     last_turn_owner = None
     last_turn_attacked = False
     last_score = {0:0,1:0}
@@ -37,11 +41,26 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
             continue
         match = ATTACK.match(event)
         if match:
-            side, _pokemon, name, _damage = match.groups()
+            side, pokemon, name, damage = match.groups()
             side = int(side)
             stats[side]['attacks'] += 1
             attacks[side][name] += 1
+            attacks_by_pokemon[side][pokemon] += 1
+            # This is the logged attack amount, not net effective damage: KO
+            # overkill, Bench effects and damage prevention are not inferred.
+            damage_by_pokemon[side][pokemon] += int(damage)
+            damage_by_attack[side][name] += int(damage)
             last_turn_attacked = True
+            continue
+        match = DIVING.match(event)
+        if match:
+            side,pokemon=int(match.group(1)),match.group(2)
+            stats[side]['attacks'] += 1
+            attacks[side]['Diving Icicles'] += 1
+            attacks_by_pokemon[side][pokemon] += 1
+            # Attack damage is targeted and may be prevented; do not infer
+            # actual effective damage from this discarding log.
+            last_turn_attacked=True
             continue
         match = TRAINER.match(event)
         if match:
@@ -98,6 +117,9 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
         'counts': dict(stats[side]),
         'attacks_by_name': dict(attacks[side]),
         'trainers_by_name': dict(trainers[side]),
+        'attacks_by_pokemon': dict(attacks_by_pokemon[side]),
+        'reported_damage_by_pokemon': dict(damage_by_pokemon[side]),
+        'reported_damage_by_attack': dict(damage_by_attack[side]),
     } for side in (0, 1)}
 
 
@@ -105,12 +127,12 @@ def merge_telemetry(accumulator: dict, game_stats: dict[int, dict], reverse: boo
     for named_side in ('left', 'right'):
         player = (1 if reverse else 0) if named_side == 'left' else (0 if reverse else 1)
         src = game_stats[player]
-        for field in ('counts', 'attacks_by_name', 'trainers_by_name'):
+        for field in ('counts', 'attacks_by_name', 'trainers_by_name', 'attacks_by_pokemon', 'reported_damage_by_pokemon', 'reported_damage_by_attack'):
             accumulator[named_side][field].update(src[field])
 
 
 def new_telemetry() -> dict:
-    return {side:{k:Counter() for k in ('counts','attacks_by_name','trainers_by_name')}
+    return {side:{k:Counter() for k in ('counts','attacks_by_name','trainers_by_name','attacks_by_pokemon','reported_damage_by_pokemon','reported_damage_by_attack')}
             for side in ('left','right')}
 
 

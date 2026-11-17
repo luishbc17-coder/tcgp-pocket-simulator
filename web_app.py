@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.7: strategic policy duel and 16 sourced presets."""
+"""TCG Pocket Lab v0.9.8: public-state planning and 26 sourced presets."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -19,7 +19,8 @@ from matrix_replay import replay_matrix_round
 from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
-from strategic_agent import StrategicAgent
+from strategic_agent import StrategicAgentV097
+from planning_agent import PlanningAgentV098
 from policy_duel import duel_policies
 from deck_identity import describe_selection, compare_decks
 from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
@@ -325,8 +326,8 @@ if current_view == '🏆 Matriz':
     matrix_games = st.select_slider('Partidas por confronto',
         options=[20,40,100], value=20, key='matrix_games_v094')
     matrix_policy = st.selectbox('Política usada pelos dois jogadores',
-        ['strategic','tactical','baseline'],
-        format_func=lambda mode: {'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
+        ['strategic','planning','tactical','baseline'],
+        format_func=lambda mode: {'planning':'Planejadora v0.9.8 (experimental)', 'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
         key='matrix_policy_v094')
     matrix_seed = st.number_input('Semente da matriz', min_value=0, max_value=2_000_000_000,
         step=1, value=20261116, key='matrix_seed_v094')
@@ -547,7 +548,7 @@ if current_view == '🏆 Matriz':
             st.info('Comparação A/B clássica × tática disponível após matriz completa com uma dessas duas políticas. Para avaliar a estratégica, use Duelo entre IAs abaixo.')
         st.download_button('⬇️ Baixar matriz completa em JSON',
             data=json.dumps(matrix_report,ensure_ascii=False,indent=2),
-            file_name='matriz_meta_v095.json',mime='application/json',
+            file_name='matriz_meta_v098.json',mime='application/json',
             key='download_matrix_json_v094',use_container_width=True)
         # A compact export is easier to inspect in a spreadsheet on a phone.
         import csv
@@ -563,7 +564,7 @@ if current_view == '🏆 Matriz':
                 outcome.get('draw',''),item.get('score_left_pct',''),
                 item.get('score_right_pct','')])
         st.download_button('⬇️ Baixar confrontos em CSV',
-            data='\ufeff'+buffer.getvalue(),file_name='matriz_meta_v095.csv',
+            data='\ufeff'+buffer.getvalue(),file_name='matriz_meta_v098.csv',
             mime='text/csv',key='download_matrix_csv_v094',use_container_width=True)
     elif saved_matrix:
         st.info('A configuração da matriz mudou. Execute novamente para atualizar os resultados.')
@@ -571,32 +572,32 @@ if current_view == '🏆 Matriz':
 
 
     # Direct, mirror-deck policy duel isolates AI choices from deck strength.
-    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.7', expanded=False):
-        st.caption('A Estratégica v0.9.7 é experimental e pode ser inferior à v0.9.6 em alguns decks. Compare antes de adotá-la.')
+    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.8', expanded=False):
+        st.caption('🆕 IA Planejadora v0.9.8: projeta até dois turnos próprios com ataques visíveis do adversário, sem acessar a mão oculta; permanece experimental. A v0.9.7 continua disponível como referência.')
         st.caption('Duas IAs jogam entre si usando a MESMA lista, com posições e ordem '
                    'de início equilibradas. Isso é mais útil para comparar políticas '
                    'do que modificar a IA dos dois lados simultaneamente.')
         duel_slug = st.selectbox('Deck de referência para ambas as IAs',
             list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
-            key='direct_duel_deck_v096')
+            key='direct_duel_deck_v098')
         duel_col1, duel_col2 = st.columns(2)
         with duel_col1:
-            ai_a = st.selectbox('IA A', ['strategic','strategic_v096','tactical','baseline'],
-                 format_func=lambda m:{'strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
-                 key='direct_duel_a_v096')
+            ai_a = st.selectbox('IA A', ['planning','strategic','strategic_v096','tactical','baseline'],
+                 format_func=lambda m:{'planning':'Planejadora 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
+                 key='direct_duel_a_v098')
         with duel_col2:
-            ai_b = st.selectbox('IA B', ['strategic_v096','tactical','baseline','strategic'],
-                 format_func=lambda m:{'strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
-                 key='direct_duel_b_v096')
+            ai_b = st.selectbox('IA B', ['strategic','strategic_v096','tactical','baseline','planning'],
+                 format_func=lambda m:{'planning':'Planejadora 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
+                 key='direct_duel_b_v098')
         duel_games = st.select_slider('Partidas do confronto entre IAs',
-            options=[20,100,200,400],value=100,key='direct_duel_n_v096')
+            options=[20,100,200,400],value=100,key='direct_duel_n_v098')
         duel_seed = st.number_input('Semente para comparação direta', min_value=0,
             max_value=2_000_000_000, value=20261116, step=1,
-            key='direct_duel_seed_v096')
+            key='direct_duel_seed_v098')
         benchmark_split = st.radio('Conjunto de sementes', ['development', 'holdout'],
             format_func=lambda v:'Desenvolvimento (ajuste)' if v=='development' else
                 'Validação reservada (teste independente)',
-            horizontal=True, key='direct_duel_split_v097')
+            horizontal=True, key='direct_duel_split_v098')
         st.caption('Na validação reservada, as sementes são deslocadas em +10 milhões. '
                    'Não use o resultado de validação para ajustar pesos e depois '
                    'afirmar que essa mesma amostra é independente.')
@@ -608,7 +609,7 @@ if current_view == '🏆 Matriz':
             st.warning(f'Deck ainda não auditado: {duel_block}')
         can_duel = ai_a != ai_b and not duel_block
         if st.button('⚔️ Testar as duas IAs com o mesmo deck',
-                     key='run_direct_duel_v096',use_container_width=True,
+                     key='run_direct_duel_v098',use_container_width=True,
                      disabled=not can_duel):
             progress_duel = st.progress(0,text='Preparando confronto entre IAs…')
             try:
@@ -627,14 +628,14 @@ if current_view == '🏆 Matriz':
                     progress=lambda done,target:progress_duel.progress(
                         min(1.,done/target),text=f'{done}/{target} partidas')
                         if target else None)
-                st.session_state['direct_duel_report_v096']={
+                st.session_state['direct_duel_report_v098']={
                     'config':(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed),benchmark_split),
                     'report':duel_report}
                 progress_duel.progress(1.,text='Comparação concluída')
             except (RuleError,UnsupportedEffect,ValueError,TypeError,IndexError,
                     KeyError,AssertionError,AttributeError,RuntimeError) as exc:
                 st.error(f'Confronto das IAs não pôde ser executado: {type(exc).__name__}: {exc}')
-        saved_duel=st.session_state.get('direct_duel_report_v096')
+        saved_duel=st.session_state.get('direct_duel_report_v098')
         if saved_duel and saved_duel['config']==(duel_slug,ai_a,ai_b,int(duel_games),int(duel_seed),benchmark_split):
             report=saved_duel['report']
             st.metric('Partidas auditadas',report['completed'])
@@ -676,7 +677,36 @@ if current_view == '🏆 Matriz':
                     st.caption(f'{label}: {counts.get("turns_without_attack",0)/turns:.1%} '
                                f'dos turnos sem ataque · {counts.get("energy_attached",0)/turns:.2f} '
                                'energias anexadas por turno (média).')
+            if report.get('efficiency'):
+                rows_eff=[]
+                for key,name in [('a',ai_a),('b',ai_b)]:
+                    data=report['efficiency'][key]
+                    rows_eff.append({'IA':name,'Turnos sem ataque (%)':data['turns_without_attack_pct'],
+                                     'Nocautes / 100 ataques':data['knockouts_per_100_attacks'],
+                                     'Pontos / 100 ataques':data['points_per_100_attacks'],
+                                     'Anexos / 100 turnos':data['energy_per_100_turns'],
+                                     'Dano nominal / ataque':data['gross_damage_per_attack']})
+                st.markdown('**Eficiência normalizada por IA**')
+                st.dataframe(rows_eff,hide_index=True,use_container_width=True)
+                st.caption('Métricas descritivas do histórico: não atribuem causa às decisões nem comprovam superioridade.')
+            with st.expander('🎯 Eficiência por atacante · métricas observadas', expanded=False):
+                st.caption('Dano = valor numérico registrado no evento de ataque; pode incluir excesso sobre o HP restante e não incorpora todos os efeitos. Nocautes e pontos permanecem totais por IA, sem atribuição especulativa ao Pokémon.')
+                attackers=[]
+                for side,label in [('left','IA A · '+ai_a),('right','IA B · '+ai_b)]:
+                    data=report['telemetry'][side]
+                    for mon,n in sorted(data.get('attacks_by_pokemon',{}).items()):
+                        dmg=data.get('reported_damage_by_pokemon',{}).get(mon,0)
+                        attackers.append({'Política':label,'Atacante':mon,
+                                          'Ataques':n,'Dano reportado':dmg,
+                                          'Dano reportado/ataque':round(dmg/n,1) if n else None})
+                if attackers:
+                    st.dataframe(attackers,hide_index=True,use_container_width=True)
+                else:
+                    st.info('Nenhum ataque registrado neste relatório.')
             if report.get('decision_audit'):
+                st.caption('Cobertura da auditoria: '+', '.join(
+                    f'{k.upper()}={v}' for k,v in report['decision_audit'].get('coverage',{}).items())+
+                    '. Políticas anteriores podem oferecer somente ações observadas, sem escores internos.')
                 with st.expander('🔍 Auditoria — alternativas avaliadas pela IA', expanded=False):
                     st.caption('Registra as alternativas consideradas nos turnos amostrados, '
                                'pontuação heurística e motivo. Não é prova de jogada ótima.')
@@ -692,8 +722,8 @@ if current_view == '🏆 Matriz':
                 st.error('Algumas partidas falharam; não interprete as vitórias como resultado completo.')
             st.download_button('⬇️ Baixar benchmark de IA',
                 data=json.dumps(report,ensure_ascii=False,indent=2),
-                file_name='duelo_ias_v097.json',mime='application/json',
-                key='download_direct_duel_v096',use_container_width=True)
+                file_name='duelo_ias_v098.json',mime='application/json',
+                key='download_direct_duel_v098',use_container_width=True)
 
 
 if current_view == '⚔️ Meta':
@@ -728,13 +758,15 @@ if current_view == '⚔️ Meta':
     policy_label = st.selectbox(
         'Política da IA para este experimento',
         ['Estratégica v0.9.7 — prioriza recursos e sobrevivência',
+         'Planejadora v0.9.8 — prevê dois turnos próprios (experimental)',
          'Tática v0.9 — considera evoluções e melhores trocas',
          'Clássica v0.8.4 — referência anterior'],
         key='policy_choice_v09',
         help='A mesma política controla os dois jogadores. Não é treinamento de modelo de IA.')
-    agent_mode = ('strategic' if policy_label.startswith('Estratégica') else
+    agent_mode = ('planning' if policy_label.startswith('Planejadora') else
+                  'strategic' if policy_label.startswith('Estratégica') else
                   'tactical' if policy_label.startswith('Tática') else 'baseline')
-    st.caption('Estratégica v0.9.7: prioriza nocaute/pontos, desenvolve energia e audita decisões; nenhuma nova regra de carta foi implementada.')
+    st.caption('Planejadora v0.9.8 utiliza cenários públicos e não revela cartas ocultas. A versão é experimental; nenhuma nova regra de carta foi implementada.')
 
     st.divider()
     st.markdown(section('Meu deck × Todo o meta',
@@ -1045,7 +1077,7 @@ if current_view == '⚔️ Meta':
                             energy_left=tuple(payload()['energy_types']),
                             energy_right=tuple(opponent_payload['energy_types']),
                             line_map=evolution_line_map(game_cards),
-                            agent_cls={'baseline':None,'tactical':TacticalAgent,'strategic':StrategicAgent}[agent_mode])
+                            agent_cls={'baseline':None,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV098}[agent_mode])
                         st.session_state['debug_trace']={
                             'agent_mode': agent_mode,
                             'seed':int(technical_seed), 'turns':demo.turn,
@@ -1262,7 +1294,7 @@ if current_view == '⚔️ Meta':
 
 
 if current_view == '⚙️ Motor':
-    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.7')
+    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.8')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica, tática e estratégica selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
