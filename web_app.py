@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.3.4: Wally Colorless Energy and Turo Future support."""
+"""TCG Pocket Lab v0.9.4: audited meta matrix and responsive comparison."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -13,12 +13,14 @@ from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
 from card_support import build_support_index, coverage_summary
 from meta_gauntlet import build_gauntlet_plan, run_meta_gauntlet, MAX_GAMES_PER_OPPONENT
+from meta_matrix import build_matrix_plan, run_meta_matrix, MAX_GAMES_PER_PAIR
 from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from deck_identity import describe_selection, compare_decks
 from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
-                          deck_overview, matchup_preview, result_bars, status_pill, library_summary)
+                          deck_overview, matchup_preview, result_bars, status_pill, library_summary,
+                          matrix_rank_cards, matrix_pair_cards, matrix_heatmap)
 
 META = [entry['name'] for entry in DECKS.values()]
 ENERGIES = ['water', 'fire', 'grass', 'lightning', 'psychic', 'fighting', 'darkness', 'metal']
@@ -109,7 +111,7 @@ if _notice:
     st.success(f'Deck «{_notice}» carregado com sucesso. Continue na Arena ou abra Meu deck para editar.')
 # Real, stateful navigation: unlike st.tabs, it does not rely on the frontend
 # keeping an active tab after a rerun or a staged deck import.
-NAV_ITEMS = ('🔎 Cartas', '🧩 Meu deck', '⚔️ Meta', '⚙️ Motor', 'ℹ️ Sobre')
+NAV_ITEMS = ('🔎 Cartas', '🧩 Meu deck', '⚔️ Meta', '🏆 Matriz', '⚙️ Motor', 'ℹ️ Sobre')
 with st.container(key='lab_navigation_v0933'):
     current_view = st.radio('Navegação principal', NAV_ITEMS, horizontal=True,
                             label_visibility='collapsed', key='main_view_v0933')
@@ -303,11 +305,148 @@ if current_view == '🧩 Meu deck':
         if col3.button('Excluir',key='delete_'+name):
             del st.session_state.saved_decks[name]; st.rerun()
 
+
+if current_view == '🏆 Matriz':
+    st.markdown(section('Matriz completa do meta',
+        'Compare cada deck com todos os outros e identifique tendências do simulador.',
+        'ARENA · ROUND ROBIN'), unsafe_allow_html=True)
+    st.caption('Resultados técnicos com IA heurística, não probabilidades reais do meta. '
+               'O ranking atribui 1 ponto por vitória e meio ponto por empate, '
+               'com o mesmo número de partidas por adversário.')
+    selected_matrix = st.multiselect('Decks participantes', options=list(DECKS),
+        default=list(DECKS), format_func=lambda slug: DECKS[slug]['name'],
+        key='matrix_selected_v094')
+    matrix_games = st.select_slider('Partidas por confronto',
+        options=[20,40,100], value=20, key='matrix_games_v094')
+    matrix_policy = st.selectbox('Política usada pelos dois jogadores',
+        ['tactical','baseline'],
+        format_func=lambda mode: ('Tática v0.9' if mode == 'tactical' else 'Clássica v0.8.4'),
+        key='matrix_policy_v094')
+    matrix_seed = st.number_input('Semente da matriz', min_value=0, max_value=2_000_000_000,
+        step=1, value=20261116, key='matrix_seed_v094')
+    matrix_request = {'decks':list(selected_matrix), 'games_per_pair':int(matrix_games),
+                      'agent_mode':matrix_policy, 'seed':int(matrix_seed)}
+    matrix_data = None
+    matrix_field = None
+    matrix_plan = None
+    if len(selected_matrix) >= 2:
+        try:
+            matrix_data = fetch_gameplay_catalog()
+            matrix_field = {slug:get_preset(slug) for slug in DECKS if slug in selected_matrix}
+            matrix_plan = build_matrix_plan(matrix_field, cards, matrix_data)
+            st.markdown('<div class="lab-matrix-lead">'
+                f'<span class="lab-matrix-hint">🃏 {len(selected_matrix)} decks</span>'
+                f'<span class="lab-matrix-hint">⚔️ {matrix_plan["total_pairs"]} pares diferentes</span>'
+                f'<span class="lab-matrix-hint">✅ {matrix_plan["ready_pairs"]} simuláveis</span>'
+                f'<span class="lab-matrix-hint">🎲 {matrix_plan["ready_pairs"]*int(matrix_games)} partidas previstas</span>'
+                '</div>', unsafe_allow_html=True)
+            if matrix_plan['blocked_pairs']:
+                st.warning(f'{matrix_plan["blocked_pairs"]} par(es) pendente(s). '
+                           'Eles aparecerão sem pontuação e não entrarão no ranking.')
+                with st.expander('Ver os efeitos e os confrontos pendentes'):
+                    for pair in matrix_plan['pairs']:
+                        if pair['status']=='blocked':
+                            st.markdown(f'**{pair["left_name"]} × {pair["right_name"]}**')
+                            for reason in pair['reasons'][:4]:
+                                st.caption(reason)
+        except (requests.RequestException, ValueError, KeyError,
+                TypeError, RuleError, UnsupportedEffect) as exc:
+            st.error(f'Não foi possível verificar os decks: {type(exc).__name__}: {exc}')
+    else:
+        st.info('Selecione pelo menos dois decks para montar a matriz.')
+    can_run_matrix = bool(matrix_plan and matrix_plan['ready_pairs'] > 0)
+    if st.button('▶ Executar matriz de confrontos', key='run_matrix_v094',
+                 use_container_width=True, disabled=not can_run_matrix):
+        bar = st.progress(0, text='Preparando matriz auditada…')
+        try:
+            def update_matrix(done, expected):
+                if expected:
+                    bar.progress(min(1.0,done/expected),
+                                 text=f'{done}/{expected} partidas técnicas')
+            matrix_result = run_meta_matrix(matrix_field, cards, matrix_data,
+                games_per_pair=int(matrix_games),seed=int(matrix_seed),
+                agent_mode=matrix_policy,progress=update_matrix)
+            st.session_state['matrix_report_v094'] = {
+                'request':matrix_request,'report':matrix_result}
+            bar.progress(1.0,text=f'{matrix_result["completed"]} partidas concluídas')
+            st.session_state.pop('matrix_error_v094',None)
+        except (RuleError, UnsupportedEffect, ValueError, IndexError,
+                TypeError, KeyError, AttributeError, RuntimeError) as exc:
+            st.session_state.pop('matrix_report_v094',None)
+            st.error(f'A matriz não pôde ser concluída: {type(exc).__name__}: {exc}')
+            st.session_state['matrix_error_v094'] = {
+                'kind':'technical_meta_matrix_failure', 'version':VERSION,
+                'request':matrix_request, 'type':type(exc).__name__,
+                'message':str(exc)[:500]}
+    last_matrix_error = st.session_state.get('matrix_error_v094')
+    if last_matrix_error and last_matrix_error['request']==matrix_request:
+        st.download_button('⬇️ Diagnóstico da falha (JSON)',
+            data=json.dumps(last_matrix_error,ensure_ascii=False,indent=2),
+            file_name='erro_matriz_v094.json',mime='application/json',
+            key='matrix_error_download_v094',use_container_width=True)
+    saved_matrix = st.session_state.get('matrix_report_v094')
+    if saved_matrix and saved_matrix['request']==matrix_request:
+        matrix_report = saved_matrix['report']
+        summary = matrix_report['summary']
+        m1,m2,m3 = st.columns(3)
+        m1.metric('Pares concluídos',f'{summary["completed_pairs"]}/{summary["total_pairs"]}')
+        m2.metric('Partidas auditadas',matrix_report['completed'])
+        m3.metric('Falhas',matrix_report['failed'])
+        if not summary['ranking_complete']:
+            st.warning('Matriz incompleta: não há ranking geral comparável. '
+                       'A pontuação disponível é parcial e pares pendentes não contam como derrota.')
+        st.markdown('### 🏆 Ranking experimental')
+        st.caption('Pontuação = (vitórias + 0,5 × empates) ÷ partidas. '
+                   'A posição só é atribuída quando todos os pares terminam sem falhas.')
+        st.markdown(matrix_rank_cards(summary['ranking']), unsafe_allow_html=True)
+        st.markdown('### 🔄 Quem começa leva vantagem?')
+        first = summary['first_player']
+        if first['games']:
+            c1,c2,c3=st.columns(3)
+            c1.metric('Vitórias de quem começou',first['first_wins'])
+            c2.metric('Vitórias do segundo',first['second_wins'])
+            c3.metric('Empates',first['draws'])
+            st.caption(f'De {first["games"]} partidas nos pares completos: '
+                       f'quem começou venceu {first["first_win_pct"]:.1f}%. '
+                       'Isso não isola o efeito causal de jogar primeiro.')
+        st.markdown('### 🧩 Matriz de resultados')
+        st.caption('Em cada célula: pontuação percentual do deck da linha contra '
+                   'o deck da coluna; empate vale meio ponto. Deslize lateralmente no celular.')
+        st.markdown(matrix_heatmap(matrix_report),unsafe_allow_html=True)
+        with st.expander('⚔️ Ver os confrontos individualmente',expanded=False):
+            st.markdown(matrix_pair_cards(matrix_report['pairs']),unsafe_allow_html=True)
+        st.download_button('⬇️ Baixar matriz completa em JSON',
+            data=json.dumps(matrix_report,ensure_ascii=False,indent=2),
+            file_name='matriz_meta_v094.json',mime='application/json',
+            key='download_matrix_json_v094',use_container_width=True)
+        # A compact export is easier to inspect in a spreadsheet on a phone.
+        import csv
+        import io
+        buffer=io.StringIO()
+        writer=csv.writer(buffer)
+        writer.writerow(['Deck A','Deck B','Estado','Partidas','Vitorias A',
+                         'Vitorias B','Empates','Pontuacao A (%)','Pontuacao B (%)'])
+        for item in matrix_report['pairs']:
+            outcome=item.get('outcomes') or {}
+            writer.writerow([item['left_name'],item['right_name'],item['status'],
+                item.get('completed',0),outcome.get('left',''),outcome.get('right',''),
+                outcome.get('draw',''),item.get('score_left_pct',''),
+                item.get('score_right_pct','')])
+        st.download_button('⬇️ Baixar confrontos em CSV',
+            data='\ufeff'+buffer.getvalue(),file_name='matriz_meta_v094.csv',
+            mime='text/csv',key='download_matrix_csv_v094',use_container_width=True)
+    elif saved_matrix:
+        st.info('A configuração da matriz mudou. Execute novamente para atualizar os resultados.')
+
+
 if current_view == '⚔️ Meta':
     st.markdown(section('Arena de confrontos',
         'Escolha seu oponente, confira os efeitos e investigue o comportamento da IA.',
         'BATTLE LAB'), unsafe_allow_html=True)
     st.caption('Os resultados são experimentais: a IA e o motor ainda não reproduzem todas as regras do jogo.')
+    st.button('🏆 Abrir matriz dos 21 confrontos', key='open_matrix_v094',
+        use_container_width=True,
+        on_click=lambda: st.session_state.__setitem__('main_view_v0933','🏆 Matriz'))
     if st.session_state.get('_deck_transfer_notice_meta'):
         st.success(st.session_state.pop('_deck_transfer_notice_meta'))
     with st.expander(f'📚 Biblioteca de decks — {len(DECKS)} listas de 20 cartas', expanded=False):

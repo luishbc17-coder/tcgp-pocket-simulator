@@ -1,4 +1,4 @@
-"""Presentation-only helpers for TCG Pocket Lab v0.9.3.
+"""Presentation-only helpers for TCG Pocket Lab v0.9.4.
 
 Keep this module free from Streamlit and battle engine imports so user-facing
 markup is independently testable. Never trust deck/card display strings as HTML.
@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.3.4'
+VERSION = '0.9.4'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),
@@ -199,6 +199,51 @@ CSS = r"""
  .lab-gauntlet-stat{padding:10px 7px;}.lab-gauntlet-stat b{font-size:1.12rem;}
  .lab-gauntlet-stat span{font-size:.63rem;}.lab-gauntlet-item{padding:12px;}}
 
+
+/* Meta Matrix: compact ranking, match cards and horizontally contained matrix. */
+.lab-matrix-lead {display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 14px;}
+.lab-matrix-hint {border:1px solid rgba(141,124,245,.26);background:rgba(141,124,245,.075);
+  border-radius:999px;padding:6px 10px;font-size:.73rem;font-weight:680;color:var(--text-color);}
+.lab-rank-list {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0;}
+.lab-rank-card {border:1px solid rgba(141,124,245,.22);border-radius:17px;padding:14px;
+  background:color-mix(in srgb,var(--secondary-background-color) 81%,var(--background-color));min-width:0;}
+.lab-rank-top {display:flex;gap:12px;align-items:center;min-width:0;}
+.lab-rank-pos {flex:0 0 41px;height:41px;border-radius:12px;display:grid;place-items:center;
+  color:#c6bcff;background:rgba(141,124,245,.14);border:1px solid rgba(141,124,245,.28);
+  font-weight:850;font-size:.97rem;}
+.lab-rank-name {font-size:.91rem;line-height:1.3;font-weight:790;color:var(--text-color);overflow-wrap:anywhere;}
+.lab-rank-foot {display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-top:12px;}
+.lab-rank-foot strong {font-size:1.36rem;color:var(--text-color);font-variant-numeric:tabular-nums;letter-spacing:-.02em;}
+.lab-rank-foot span {font-size:.7rem;color:var(--text-color);opacity:.7;line-height:1.4;text-align:right;}
+.lab-rank-meter {height:6px;border-radius:9px;margin-top:10px;background:rgba(134,135,178,.2);overflow:hidden;}
+.lab-rank-meter > span {display:block;height:100%;border-radius:9px;background:linear-gradient(90deg,#8373ea,#68b7c7);}
+.lab-matrix-pairs {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:10px 0;}
+.lab-pair {border:1px solid rgba(141,124,245,.18);border-radius:15px;padding:13px;min-width:0;
+  background:color-mix(in srgb,var(--secondary-background-color) 82%,var(--background-color));}
+.lab-pair-heading {font-size:.79rem;line-height:1.4;color:var(--text-color);overflow-wrap:anywhere;}
+.lab-pair-heading b {font-weight:800;}
+.lab-pair-score {display:flex;justify-content:space-between;gap:10px;margin:12px 0 9px;
+  font-weight:820;font-size:1.08rem;color:var(--text-color);font-variant-numeric:tabular-nums;}
+.lab-pair-bar {height:9px;display:flex;border-radius:9px;overflow:hidden;background:rgba(134,135,178,.2);}
+.lab-pair-bar .left {background:#8778ed}.lab-pair-bar .draw {background:#8f97a8}.lab-pair-bar .right {background:#69c7d0}
+.lab-pair-detail {font-size:.69rem;color:var(--text-color);opacity:.7;margin-top:9px;line-height:1.4;}
+.lab-pair.pending {border-style:dashed;}
+.lab-matrix-scroll {width:100%;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;
+  border:1px solid rgba(141,124,245,.26);border-radius:15px;margin:12px 0;}
+.lab-matrix-table {width:100%;min-width:630px;border-collapse:separate;border-spacing:0;
+  color:var(--text-color);font-size:.76rem;}
+.lab-matrix-table th,.lab-matrix-table td {padding:12px 9px;text-align:center;
+  border-right:1px solid rgba(144,147,186,.13);border-bottom:1px solid rgba(144,147,186,.13);}
+.lab-matrix-table th {font-weight:850;background:color-mix(in srgb,var(--secondary-background-color) 86%,var(--background-color));}
+.lab-matrix-table .head {position:sticky;left:0;z-index:1;min-width:56px;text-align:left;}
+.lab-matrix-table td.score {font-weight:780;font-variant-numeric:tabular-nums;
+  background:rgba(100,180,190,calc(var(--heat,0) * .21));}
+.lab-matrix-table td.na {color:var(--text-color);opacity:.52;}
+.lab-matrix-legend {font-size:.74rem;line-height:1.6;color:var(--text-color);opacity:.8;}
+@media(max-width:700px){.lab-rank-list,.lab-matrix-pairs{grid-template-columns:1fr;}
+  .lab-rank-card{padding:12px;}.lab-rank-foot strong{font-size:1.27rem;}
+  .lab-matrix-scroll{margin-left:0;margin-right:0;}}
+
 </style>
 """
 
@@ -359,3 +404,85 @@ def gauntlet_cards(opponents: list[dict]) -> str:
             '</div></div>'
         )
     return '<div class="lab-gauntlet-grid">'+''.join(tiles)+'</div>'
+
+
+# === v0.9.4 meta-matrix presentation (the pure calculations live elsewhere) ===
+def matrix_rank_cards(ranking: list[dict]) -> str:
+    """Render completed and incomplete ranks without unescaped deck names."""
+    tiles = []
+    for entry in ranking:
+        rank = f"#{entry['rank']}" if entry.get('rank') is not None else '—'
+        score = (f"{float(entry['score_pct']):.1f}%"
+                 if entry.get('score_pct') is not None else '—')
+        value = float(entry.get('score_pct') or 0)
+        tiles.append(
+            '<article class="lab-rank-card">'
+            '<div class="lab-rank-top">'
+            f'<span class="lab-rank-pos">{safe(rank)}</span>'
+            f'<span class="lab-rank-name">{safe(entry["name"])}</span></div>'
+            '<div class="lab-rank-foot">'
+            f'<strong>{safe(score)}</strong>'
+            f'<span>{int(entry["wins"])}V · {int(entry["losses"])}D · {int(entry["draws"])}E<br>'
+            f'{int(entry["played_pairs"])}/{int(entry["expected_pairs"])} confrontos</span></div>'
+            f'<div class="lab-rank-meter"><span style="width:{max(0,min(100,value)):.2f}%"></span></div>'
+            '</article>')
+    return '<div class="lab-rank-list">' + ''.join(tiles) + '</div>'
+
+
+def matrix_pair_cards(pairs: list[dict]) -> str:
+    tiles = []
+    for row in pairs:
+        left, right = safe(row['left_name']),safe(row['right_name'])
+        if row['status'] == 'completed':
+            n = row['completed']
+            out = row['outcomes']
+            widths = [round(100*out[key]/n,3) for key in ('left','draw','right')]
+            tiles.append(
+                '<article class="lab-pair">'
+                f'<div class="lab-pair-heading"><b>{left}</b> × <b>{right}</b></div>'
+                f'<div class="lab-pair-score"><span>{float(row["score_left_pct"]):.1f}%</span>'
+                f'<span>{float(row["score_right_pct"]):.1f}%</span></div>'
+                '<div class="lab-pair-bar" aria-hidden="true">'
+                f'<span class="left" style="width:{widths[0]}%"></span>'
+                f'<span class="draw" style="width:{widths[1]}%"></span>'
+                f'<span class="right" style="width:{widths[2]}%"></span></div>'
+                f'<div class="lab-pair-detail">{int(out["left"])}–{int(out["right"])} vitórias'
+                f' · {int(out["draw"])} empates · {int(n)} partidas</div></article>')
+        else:
+            status = {'blocked':'Pendente','partial':'Parcial','error':'Erro'}.get(row['status'],'Indisponível')
+            reason = '; '.join(row.get('reasons',[])[:2]) or (row.get('errors') or [{}])[0].get('message','')
+            tiles.append('<article class="lab-pair pending">'
+                f'<div class="lab-pair-heading"><b>{left}</b> × <b>{right}</b></div>'
+                f'<div class="lab-pair-detail">{safe(status)} · {safe(reason)}</div></article>')
+    return '<div class="lab-matrix-pairs">' + ''.join(tiles) + '</div>'
+
+
+def matrix_heatmap(report: dict) -> str:
+    """Diagonal is not a simulated result. Cells use score % (draw = half)."""
+    decks = report['plan']['decks']
+    scores = {}
+    for row in report['pairs']:
+        if row['status'] == 'completed':
+            scores[(row['left_slug'],row['right_slug'])]=row['score_left_pct']
+            scores[(row['right_slug'],row['left_slug'])]=row['score_right_pct']
+    letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    head = ''.join(f'<th scope="col">{letters[i]}</th>' for i in range(len(decks)))
+    rows=[]
+    for i,d in enumerate(decks):
+        cells=[]
+        for j,e in enumerate(decks):
+            score = scores.get((d['slug'],e['slug']))
+            if i == j:
+                cells.append('<td class="na" title="Mesmo deck — não simulado">×</td>')
+            elif score is None:
+                cells.append('<td class="na" title="Confronto sem resultado completo">—</td>')
+            else:
+                color = max(0,min(1,score/100))
+                cells.append(f'<td class="score" style="--heat:{color:.3f}" '
+                             f'title="{safe(d["name"])} contra {safe(e["name"])}">{float(score):.1f}%</td>')
+        rows.append(f'<tr><th class="head" scope="row">{letters[i]}</th>{"".join(cells)}</tr>')
+    legend = ' · '.join(f'<b>{letters[i]}</b> {safe(d["name"])}' for i,d in enumerate(decks))
+    return ('<div class="lab-matrix-scroll" role="region" aria-label="Matriz de confronto — deslize para os lados">'
+            '<table class="lab-matrix-table"><thead><tr><th class="head">Deck</th>'
+            f'{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+            f'<div class="lab-matrix-legend">{legend}</div>')
