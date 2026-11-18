@@ -1166,5 +1166,7 @@ def play_fixture_match(left, right, seed=0, energy_left=('water',), energy_right
     battle = battle_cls(left, right, energy_left, energy_right, seed, force_first=force_first)
     agent = (agent_cls or RuleAgent)(line_map)
     while not battle.finished:
+        if hasattr(agent,'configure_own_deck'):
+            agent.configure_own_deck(left if battle.current==0 else right)
         agent.play_turn(battle)
     return battle

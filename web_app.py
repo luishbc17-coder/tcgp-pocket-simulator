@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.10: Rare Candy, ability planning, 36 sourced presets."""
+"""TCG Pocket Lab v0.9.11: public roster setup probabilities, stable planning baselines, 41 sourced presets."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -20,7 +20,7 @@ from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgentV097
-from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910
+from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911
 from policy_duel import duel_policies
 from deck_identity import describe_selection, compare_decks
 from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
@@ -327,7 +327,7 @@ if current_view == '🏆 Matriz':
         options=[20,40,100], value=20, key='matrix_games_v094')
     matrix_policy = st.selectbox('Política usada pelos dois jogadores',
         ['strategic','planning','tactical','baseline'],
-        format_func=lambda mode: {'planning':'Planejadora v0.9.10 (experimental)', 'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
+        format_func=lambda mode: {'planning':'Planejadora v0.9.11 (experimental)', 'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
         key='matrix_policy_v094')
     matrix_seed = st.number_input('Semente da matriz', min_value=0, max_value=2_000_000_000,
         step=1, value=20261116, key='matrix_seed_v094')
@@ -572,8 +572,8 @@ if current_view == '🏆 Matriz':
 
 
     # Direct, mirror-deck policy duel isolates AI choices from deck strength.
-    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.10', expanded=False):
-        st.caption('🆕 IA Planejadora v0.9.10: projeção pública em dois turnos, Rare Candy já na mão, habilidades suportadas e auditoria por slot. Compare com v0.9.9, v0.9.8 e v0.9.7; permanece experimental.')
+    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.11', expanded=False):
+        st.caption('🆕 IA Planejadora v0.9.11: preparação probabilística pela lista original de 20 cartas, valor residual de energia e auditoria por slot. Compare com v0.9.9, v0.9.8 e v0.9.7; permanece experimental.')
         st.caption('Duas IAs jogam entre si usando a MESMA lista, com posições e ordem '
                    'de início equilibradas. Isso é mais útil para comparar políticas '
                    'do que modificar a IA dos dois lados simultaneamente.')
@@ -582,12 +582,12 @@ if current_view == '🏆 Matriz':
             key='direct_duel_deck_v098')
         duel_col1, duel_col2 = st.columns(2)
         with duel_col1:
-            ai_a = st.selectbox('IA A', ['planning','planning_v099','strategic','planning_v098','strategic_v096','tactical','baseline'],
-                 format_func=lambda m:{'planning':'Planejadora 0.9.10','planning_v099':'Planejadora anterior 0.9.9','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
+            ai_a = st.selectbox('IA A', ['planning','planning_v099','planning_v0910','strategic','planning_v098','strategic_v096','tactical','baseline'],
+                 format_func=lambda m:{'planning':'Planejadora 0.9.11','planning_v099':'Planejadora anterior 0.9.9','planning_v0910':'Planejadora anterior 0.9.10','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
                  key='direct_duel_a_v098')
         with duel_col2:
-            ai_b = st.selectbox('IA B', ['planning_v099','strategic','planning_v098','strategic_v096','tactical','baseline','planning'],
-                 format_func=lambda m:{'planning':'Planejadora 0.9.10','planning_v099':'Planejadora anterior 0.9.9','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
+            ai_b = st.selectbox('IA B', ['planning_v099','planning_v0910','strategic','planning_v098','strategic_v096','tactical','baseline','planning'],
+                 format_func=lambda m:{'planning':'Planejadora 0.9.11','planning_v099':'Planejadora anterior 0.9.9','planning_v0910':'Planejadora anterior 0.9.10','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
                  key='direct_duel_b_v098')
         duel_games = st.select_slider('Partidas do confronto entre IAs',
             options=[20,100,200,400],value=100,key='direct_duel_n_v098')
@@ -777,7 +777,7 @@ if current_view == '⚔️ Meta':
     policy_label = st.selectbox(
         'Política da IA para este experimento',
         ['Estratégica v0.9.7 — prioriza recursos e sobrevivência',
-         'Planejadora v0.9.10 — Rare Candy, habilidades e preparação (experimental)',
+         'Planejadora v0.9.11 — Rare Candy, habilidades e preparação (experimental)',
          'Tática v0.9 — considera evoluções e melhores trocas',
          'Clássica v0.8.4 — referência anterior'],
         key='policy_choice_v09',
@@ -785,7 +785,7 @@ if current_view == '⚔️ Meta':
     agent_mode = ('planning' if policy_label.startswith('Planejadora') else
                   'strategic' if policy_label.startswith('Estratégica') else
                   'tactical' if policy_label.startswith('Tática') else 'baseline')
-    st.caption('Planejadora v0.9.10 utiliza cenários públicos e não revela cartas ocultas. A versão é experimental; nenhuma nova regra de carta foi implementada.')
+    st.caption('Planejadora v0.9.11 utiliza cenários públicos e a lista própria original; não inspeciona cartas ocultas. A versão é experimental; nenhuma nova regra de carta foi implementada.')
 
     st.divider()
     st.markdown(section('Meu deck × Todo o meta',
@@ -1096,7 +1096,7 @@ if current_view == '⚔️ Meta':
                             energy_left=tuple(payload()['energy_types']),
                             energy_right=tuple(opponent_payload['energy_types']),
                             line_map=evolution_line_map(game_cards),
-                            agent_cls={'baseline':None,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0910}[agent_mode])
+                            agent_cls={'baseline':None,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0911}[agent_mode])
                         st.session_state['debug_trace']={
                             'agent_mode': agent_mode,
                             'seed':int(technical_seed), 'turns':demo.turn,
@@ -1313,7 +1313,7 @@ if current_view == '⚔️ Meta':
 
 
 if current_view == '⚙️ Motor':
-    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.10')
+    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.11')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica, tática e estratégica selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')

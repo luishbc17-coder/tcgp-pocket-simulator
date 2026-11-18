@@ -8,7 +8,7 @@ response. No new card effects or move legality is implemented here.
 from __future__ import annotations
 from collections import Counter
 from copy import copy
-from battle_engine import Attack, Battle, InPlay, Player
+from battle_engine import Attack, Battle, InPlay, Player, Card
 from strategic_agent import StrategicAgentV097
 
 
@@ -815,3 +815,182 @@ class PlanningAgentV0910(PlanningAgentV099):
         chosen=max(viable,key=lambda x:x['score']) if viable else options[0]
         self._note('retreat',chosen,options,'Recuo legal, identificador de slot e margem mínima de 24 pontos')
         return p.all_in_play()[chosen['index']] if 'index' in chosen else None
+
+
+class PlanningAgentV0911(PlanningAgentV0910):
+    """v0.9.11: conservative public-deck setup valuation and energy tempo.
+
+    No access to either shuffled deck's card identities, opponent hand or
+    opponent Energy Zone. The optionally configured OWN deck roster is the
+    pre-shuffle 20-card list, not the remaining draw pile. Probabilities are
+    deliberately *discounted upper-bound estimates*, not simulated draws.
+    """
+    policy_name = 'planning_v0911'
+    MAX_UNSEEN_EVOLUTION_BONUS = 12.0
+    MAX_ENERGY_RESIDUAL_BONUS = 30.0
+
+    def __init__(self, line_map=None):
+        super().__init__(line_map)
+        self._own_deck_roster: tuple[Card,...] = ()
+        # Evidence-based guardrail: the 0.9.10 planner lost ground on the
+        # all-basic Hoopa roster. Retain the *exact* 0.9.9 policy for all-basic
+        # lists, not a Pokemon-name-specific hardcode, until A/B validation.
+        self._basic_only_reference = PlanningAgentV099(line_map)
+        self._execution_route = 'planning_v0911'
+
+    def play_turn(self, battle: Battle):
+        has_evolution = any(c.kind=='pokemon' and c.stage>0
+                            for c in self._own_deck_roster)
+        has_pokemon = any(c.kind=='pokemon' for c in self._own_deck_roster)
+        if has_pokemon and not has_evolution:
+            self._execution_route='planning_v099_guardrail_all_basic'
+            result=self._basic_only_reference.play_turn(battle)
+            self.decision_records=self._basic_only_reference.decision_records
+            for record in self.decision_records:
+                record['policy_route']='planning_v099_guardrail_all_basic'
+            return result
+        self._execution_route='planning_v0911'
+        return super().play_turn(battle)
+
+    def configure_own_deck(self, cards):
+        """Supply own PUBLIC starting recipe, never the shuffled deck order."""
+        roster=tuple(cards)
+        if len(roster)!=20 or not all(isinstance(x,Card) for x in roster):
+            raise ValueError('Perfil próprio requer as 20 cartas originais')
+        self._own_deck_roster=roster
+        return self
+
+    @staticmethod
+    def _two_draw_upper_probability(population: int, hits: int) -> float:
+        """P(at least one match in up to 2 draws), before safety discount."""
+        n=max(0,int(population)); k=max(0,min(n,int(hits)))
+        if not n or not k:return 0.0
+        misses=1.0
+        for draw in range(min(2,n)):
+            misses*=max(0,n-k-draw)/max(1,n-draw)
+        return max(0.0,min(1.0,1.0-misses))
+
+    def _unseen_evolution_bonus(self, player:Player, target:InPlay, zone:str):
+        """Probabilistic option for an evolution *in the known recipe*.
+
+        Estimate which roster cards might still be drawable from known own
+        hand/board. Never enumerate player.deck or look at opponent private
+        data. Discarded/evolved cards can only reduce real probabilities, so
+        the result is discounted and capped. No speculative card is actually
+        placed in hand or used in the search tree.
+        """
+        if not self._own_deck_roster:
+            return 0.0, 'perfil inicial não fornecido'
+        current = target.card
+        if current.stage >= 2:
+            return 0.0, 'último estágio'
+        visible=Counter(c.id for c in player.hand)
+        visible.update(m.card.id for m in player.all_in_play())
+        for mon in player.all_in_play():
+            visible.update(c.id for c in mon.pre_evolutions)
+        roster=Counter(c.id for c in self._own_deck_roster)
+        # Only read the own remaining deck *length*, not its contents.
+        n=len(player.deck)
+        if n<=0:return 0.0,'sem compras restantes'
+        best=0.0; name='sem evolução plausível'
+        for evo in self._own_deck_roster:
+            if evo.kind!='pokemon' or evo.stage<=current.stage:continue
+            direct=(evo.stage==current.stage+1 and
+                    evo.evolves_from.casefold()==current.name.casefold())
+            candy_line=(current.stage==0 and evo.stage==2 and
+                   self.line_map.get(evo.evolves_from.casefold(),'').casefold()==current.name.casefold())
+            if not direct and not candy_line:continue
+            remaining=max(0,roster[evo.id]-visible[evo.id])
+            if not remaining:continue
+            p_draw=self._two_draw_upper_probability(n,remaining)*0.65
+            if candy_line:
+                known_candy=any(c.effect=='rare_candy' for c in player.hand)
+                if not known_candy:
+                    # The card AND an Item would have to be acquired; keep the
+                    # speculative route weak rather than inventing Rare Candy.
+                    p_draw*=0.18 if any(c.effect=='rare_candy' for c in self._own_deck_roster) else 0
+                else:
+                    p_draw*=0.72
+            base=self._clone(target); boosted=self._clone(target)
+            base.card=evo;boosted.card=evo;boosted.energy.append(zone)
+            for atk in evo.attacks:
+                old=self._energy_shortfall(base,atk,zone)
+                new=self._energy_shortfall(boosted,atk,zone)
+                if old==99 or new>=old or old>4:continue
+                # Attack's damage is an upper bound on payoff, but this is
+                # resource *option* value, not free projected damage.
+                impact=min(26,9+0.12*max(0,atk.damage))
+                readiness={0:1.0,1:0.85,2:0.65,3:0.35,4:0.10}.get(new,0)
+                value=p_draw*impact*readiness
+                if value>best:best=value;name=f'{evo.name}: {atk.name}, P~{p_draw:.2f}'
+        return round(min(self.MAX_UNSEEN_EVOLUTION_BONUS,best),3),name
+
+    def _energy_residual(self, player:Player, index:int):
+        mon=player.all_in_play()[index]
+        if mon.damage>=mon.max_hp:return (0.,'nocauteado')
+        zone=player.energy_types[0]
+        known,known_reason=self._preparation_value(player,index)
+        uncertain,uncertain_reason=self._unseen_evolution_bonus(player,mon,zone)
+        # Future attack setup for any *currently visible* card, including
+        # backups with 2-3 Energy moves. This restores the tempo incentive
+        # weakened by the v0.9.10 no-attach threshold.
+        baseline=self._clone(mon);added=self._clone(mon);added.energy.append(zone)
+        best_existing=0.0
+        for atk in mon.card.attacks:
+            old=self._energy_shortfall(baseline,atk,zone)
+            new=self._energy_shortfall(added,atk,zone)
+            if old==99 or new>=old or old>4:continue
+            score={0:23,1:17,2:12,3:5,4:1}.get(new,0)
+            score+=min(7,max(0,atk.damage)*0.05)
+            best_existing=max(best_existing,score)
+        # Both known and probable evolutions compete for the same energy,
+        # rather than being summed as multiple imaginary attackers.
+        setup=max(known, best_existing) + uncertain
+        if mon is player.active and mon.max_hp-mon.damage<=40:
+            setup*=0.60
+        if index and player.active and any(self._payable(player.active,a)
+                                          for a in player.active.card.attacks):
+            # A ready Active allows building a reserve; this does not imply
+            # an invented future switch or an extra turn's attachment.
+            setup+=3.5 if best_existing or known or uncertain else 0
+        return round(min(self.MAX_ENERGY_RESIDUAL_BONUS,setup),3),(
+            f'conhecido: {known_reason}; baralho: {uncertain_reason}')
+
+    def select_energy_target(self,player):
+        battle=self._context_battle
+        if battle is None or len(player.energy_types)!=1:
+            return super().select_energy_target(player)
+        foe=battle.players[1-battle.current]
+        if not player.active or not foe.active:
+            return super().select_energy_target(player)
+        baseline=self._path(player,foe)
+        options=[{'name':'não anexar','label':'não anexar','choice_id':'energy:none',
+                  'score':baseline['score'], 'current_attack':baseline['current'],
+                  'next_attack':baseline['next'], 'incoming_risk':baseline['risk']}]
+        for idx,mon in enumerate(player.all_in_play()[:self.MAX_OWN_BRANCHES]):
+            if mon.max_hp<=mon.damage:continue
+            path=self._path(player,foe,target_idx=idx)
+            residual,why=self._energy_residual(player,idx)
+            ready=any(self._payable(mon,a) for a in mon.card.attacks)
+            immediate=any(not self._payable(mon,a) and
+                self._can_reach(mon,a,player.energy_types[0],1) for a in mon.card.attacks)
+            # No reward for overfilling a paid attack unless the energy is
+            # needed by another visible/possible line.
+            waste=(10 if ready and not immediate and residual==0 else 0)
+            score=round(path['score']+residual*0.89+(4 if immediate and idx==0 else 0)-waste,3)
+            label='Ativo' if idx==0 else f'Banco {idx}'
+            options.append({'name':mon.card.name,'label':f'{mon.card.name} [{label}]',
+                'choice_id':f'energy:slot:{idx}','index':idx,'score':score,
+                'current_attack':path['current'],'next_attack':path['next'],
+                'incoming_risk':path['risk'],'enemy_response':path['response'],
+                'residual_bonus':round(residual*0.89,3),'residual_reason':why,
+                'improvement_vs_no_attachment':round(path['score']-baseline['score'],3),
+                'enables_attack_immediately':immediate})
+        # Deterministic tie-breaks: stronger decision first, never a random
+        # opponent-side hidden field. Keep the no-attach branch for wasted fuel.
+        chosen=max(options,key=lambda x:(x['score'], -x.get('index',99)))
+        if chosen['choice_id']!='energy:none' and chosen['score']<=baseline['score']+1.0:
+            chosen=options[0]
+        self._note('energy',chosen,options,
+           'Projeção pública + valor residual de ataques e evoluções do deck conhecido; sem consultar cartas ocultas')
+        return player.all_in_play()[chosen['index']] if 'index' in chosen else None

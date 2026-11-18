@@ -14,7 +14,7 @@ from battle_audit import AuditedBattle, StateInvariantError, snapshot
 from deck_identity import describe_compiled, compare_decks
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgentV097
-from planning_agent import PlanningAgentV0910
+from planning_agent import PlanningAgentV0911
 from battle_metrics import count_logged_actions, merge_telemetry, new_telemetry, serialize_telemetry, duration_distribution
 
 MAX_BATCH_GAMES = 1_000
@@ -80,7 +80,7 @@ def run_technical_batch(left: list[Card], right: list[Card],
     total_actions = 0
     total_turns = 0
     replay = None
-    agent = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0910}[agent_mode](line_map or {})
+    agent = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0911}[agent_mode](line_map or {})
     telemetry = new_telemetry()
     start_time = monotonic()
     for idx in range(games):
@@ -96,6 +96,8 @@ def run_technical_batch(left: list[Card], right: list[Card],
                                    force_first=first_side,
                                    collect_trace=keep_replay and idx == 0)
             while not battle.finished:
+                if hasattr(agent,'configure_own_deck'):
+                    agent.configure_own_deck(a if battle.current==0 else b)
                 agent.play_turn(battle)
             if battle.winner is None:
                 outcome = 'draw'
