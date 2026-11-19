@@ -202,25 +202,31 @@ class TacticalAgent(RuleAgent):
             if target:
                 battle.equip_tool(card, target)
 
-        for candy in [c for c in list(p.hand) if c.effect == 'rare_candy' and not p.item_locked]:
-            made = False
-            for mon in p.all_in_play():
-                for evo in list(p.hand):
-                    if (evo.stage == 2 and p.turns_taken > 1
-                        and self.line_map.get(evo.evolves_from.casefold(), '').casefold() == mon.card.name.casefold()
-                        and mon.entered_at != battle.turn and mon.evolved_at != battle.turn):
-                        battle.rare_candy(candy, mon, evo, self.line_map)
-                        made = True
+        # v0.9.12 optional public-state sequencing hook. Earlier agents keep
+        # their original evolution order; no engine legality rules change.
+        evolution_hook = getattr(self, '_execute_planned_evolutions', None)
+        if evolution_hook is not None:
+            evolution_hook(battle)
+        else:
+            for candy in [c for c in list(p.hand) if c.effect == 'rare_candy' and not p.item_locked]:
+                made = False
+                for mon in p.all_in_play():
+                    for evo in list(p.hand):
+                        if (evo.stage == 2 and p.turns_taken > 1
+                            and self.line_map.get(evo.evolves_from.casefold(), '').casefold() == mon.card.name.casefold()
+                            and mon.entered_at != battle.turn and mon.evolved_at != battle.turn):
+                            battle.rare_candy(candy, mon, evo, self.line_map)
+                            made = True
+                            break
+                    if made:
                         break
-                if made:
-                    break
-        for evo in sorted(list(p.hand), key=lambda c: c.stage, reverse=True):
-            for mon in p.all_in_play():
-                if (evo.stage in (1, 2) and evo.stage == mon.card.stage + 1
-                    and evo.evolves_from.casefold() == mon.card.name.casefold()
-                    and p.turns_taken > 1 and mon.entered_at != battle.turn and mon.evolved_at != battle.turn):
-                    battle.evolve(mon, evo)
-                    break
+            for evo in sorted(list(p.hand), key=lambda c: c.stage, reverse=True):
+                for mon in p.all_in_play():
+                    if (evo.stage in (1, 2) and evo.stage == mon.card.stage + 1
+                        and evo.evolves_from.casefold() == mon.card.name.casefold()
+                        and p.turns_taken > 1 and mon.entered_at != battle.turn and mon.evolved_at != battle.turn):
+                        battle.evolve(mon, evo)
+                        break
 
         if battle.finished:
             battle.end_turn()
@@ -229,25 +235,32 @@ class TacticalAgent(RuleAgent):
             if (card.effect == 'flame_patch' and not p.item_locked and p.active
                     and p.active.card.element == 'fire' and p.energy_discard['fire'] > 0):
                 battle.play_trainer(card)
-        for mon in list(p.all_in_play()):
-            if mon.ability_used_turn == battle.turn:
-                continue
-            if mon.card.ability == 'water_shuriken':
-                choices = foe.all_in_play()
-                if choices:
-                    victim = min(choices, key=lambda x: (x.max_hp-x.damage, x.card.points))
-                    battle.use_ability(mon, victim)
-                    if battle.finished:
-                        battle.end_turn()
-                        return
-            elif mon.card.ability == 'volt_charge' and p.energy_types == ('lightning',):
-                battle.use_ability(mon)
-            elif (mon.card.ability == 'ice_maker' and p.energy_types == ('water',)
-                  and p.active and p.active.card.element == 'water'):
-                battle.use_ability(mon)
-            elif (mon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
-                  and mon.damage + 30 < mon.max_hp):
-                battle.use_ability(mon)
+        ability_hook = getattr(self, '_execute_planned_abilities', None)
+        if ability_hook is not None:
+            ability_hook(battle)
+            if battle.finished:
+                battle.end_turn()
+                return
+        else:
+            for mon in list(p.all_in_play()):
+                if mon.ability_used_turn == battle.turn:
+                    continue
+                if mon.card.ability == 'water_shuriken':
+                    choices = foe.all_in_play()
+                    if choices:
+                        victim = min(choices, key=lambda x: (x.max_hp-x.damage, x.card.points))
+                        battle.use_ability(mon, victim)
+                        if battle.finished:
+                            battle.end_turn()
+                            return
+                elif mon.card.ability == 'volt_charge' and p.energy_types == ('lightning',):
+                    battle.use_ability(mon)
+                elif (mon.card.ability == 'ice_maker' and p.energy_types == ('water',)
+                      and p.active and p.active.card.element == 'water'):
+                    battle.use_ability(mon)
+                elif (mon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
+                      and mon.damage + 30 < mon.max_hp):
+                    battle.use_ability(mon)
 
         # Draw support first if the hand is shallow; a preserved Cyrus can turn
         # an otherwise weak attack into an immediate KO after energy attachment.

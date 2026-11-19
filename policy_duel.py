@@ -14,13 +14,13 @@ from battle_engine import Card, RuleAgent, RuleError, UnsupportedEffect, validat
 from batch_runner import verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgent, StrategicAgentV097
-from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911
+from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911, PlanningAgentV0912
 from battle_metrics import count_logged_actions, new_telemetry, serialize_telemetry
 from matrix_insights import score_interval
 from duel_insights import duel_efficiency
 
 POLICIES = {'baseline':RuleAgent, 'tactical':TacticalAgent,
-            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0911, 'planning_v0910':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
+            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0912, 'planning_v0911':PlanningAgentV0911, 'planning_v0910':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
 MAX_HEAD_TO_HEAD_GAMES = 400
 
 
@@ -51,6 +51,7 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
     seating={'a_p0':Counter(),'a_p1':Counter()}
     telemetry=new_telemetry(); trace=None;total_checked=0;total_turns=0
     decision_counts = {'a':Counter(),'b':Counter()}
+    sequence_counts = {'a':Counter(),'b':Counter()}
     decision_samples=[]
     started=monotonic()
     for idx in range(games):
@@ -85,6 +86,28 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
             for label, agent in zip(('a','b'),agents):
                 notes = getattr(agent, 'decision_records', [])
                 decision_counts[label].update(row['decision'] for row in notes)
+                # Capped decision log; these measure choices/explanations,
+                # not actual causality or counterfactual game outcomes.
+                for note in notes:
+                    if note.get('decision') == 'sequence':
+                        sequence_counts[label]['plans_evaluated'] += 1
+                        chosen = str(note.get('chosen', ''))
+                        if 'energia→slot' in chosen:
+                            sequence_counts[label]['plans_with_energy'] += 1
+                        if 'recuo→slot' in chosen:
+                            sequence_counts[label]['plans_with_retreat'] += 1
+                        if 'ataque→' in chosen:
+                            sequence_counts[label]['plans_with_attack'] += 1
+                        lead = next((r for r in note.get('alternatives', [])
+                                     if r.get('choice_id') == note.get('chosen_id')), {})
+                        if lead.get('survives_worst_visible_reply') is False:
+                            sequence_counts[label]['scenarios_with_ko_risk'] += 1
+                    elif note.get('decision') == 'sequence_preparation':
+                        for event in note.get('events', []):
+                            if event.get('kind') == 'evolution':
+                                sequence_counts[label]['evolutions_prioritized'] += 1
+                            elif event.get('kind') == 'ability':
+                                sequence_counts[label]['abilities_prioritized'] += 1
                 if idx < 4:  # bounded examples; do not multiply JSON size by games
                     decision_samples.extend({'round':idx+1,'policy':label,**row}
                                             for row in notes[:12])
@@ -120,7 +143,7 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
     ci=score_interval(wins['a'],wins['b'],wins['draw']) if complete else None
     scenario_intervals = {key:score_interval(value['a'],value['b'],value['draw'])
                           for key,value in sides.items()} if complete else None
-    return {'kind':'technical_policy_duel','version':'0.9.11','validated_competitive':False,
+    return {'kind':'technical_policy_duel','version':'0.9.12','validated_competitive':False,
             'disclaimer':'Benchmark de políticas heurísticas com baralho espelhado, não prova de força contra humanos ou no meta.',
             'policy_a':policy_a,'policy_b':policy_b,'seed':seed,
             'deck_name':deck_name or 'Baralho espelhado (nome não informado)',
@@ -142,6 +165,8 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
                      'a':'structured' if hasattr(POLICIES[policy_a], '_note') else 'observed_only',
                      'b':'structured' if hasattr(POLICIES[policy_b], '_note') else 'observed_only'},
                      'counts':{k:dict(v) for k,v in decision_counts.items()},
+                     'sequence_summary':{k:dict(v) for k,v in sequence_counts.items()},
+                     'sequence_summary_note':'Contadores de planos nas auditorias limitadas a 50 registros por política por partida; não são resultados causais. Ações reais constam na telemetria.',
                               'examples':decision_samples[:80]},
             'second_player_advantage':{
                 'a_second':{k:sides['b_first'][k] for k in ('a','b','draw')},

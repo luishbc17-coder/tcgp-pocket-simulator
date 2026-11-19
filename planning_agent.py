@@ -994,3 +994,354 @@ class PlanningAgentV0911(PlanningAgentV0910):
         self._note('energy',chosen,options,
            'Projeção pública + valor residual de ataques e evoluções do deck conhecido; sem consultar cartas ocultas')
         return player.all_in_play()[chosen['index']] if 'index' in chosen else None
+
+
+class PlanningAgentV0912(PlanningAgentV0911):
+    """v0.9.12: bounded, public-state turn-sequence search.
+
+    Uses beam pruning across (energy target, retreat destination, attack),
+    checks a visible enemy reply, and values a single future own turn. The
+    current-turn evolution/ability hooks score *legal* actions already in hand
+    or on the board; they never create cards or touch hidden opponent fields.
+    Historic policies and the v0.9.11 all-Basic guardrail remain untouched.
+    """
+    policy_name = 'planning_v0912'
+    BEAM_WIDTH = 10
+    MAX_SEQUENCE_OPTIONS = 54
+    FUTURE_WEIGHT = 0.49
+    MAX_BENCH_SETUP = 20.0
+
+    def __init__(self, line_map=None):
+        super().__init__(line_map)
+        self._last_integrated_plan = None
+        self._turn_sequence_events = []
+
+    def _evolution_candidates(self, battle):
+        p = battle.players[battle.current]
+        available=[]
+        if p.turns_taken <= 1:
+            return available
+        for idx,mon in enumerate(p.all_in_play()):
+            if mon.entered_at==battle.turn or mon.evolved_at==battle.turn:
+                continue
+            for evo in p.hand:
+                if evo.kind!='pokemon':
+                    continue
+                normal=(evo.stage==mon.card.stage+1 and
+                        evo.evolves_from.casefold()==mon.card.name.casefold())
+                if normal:
+                    available.append((idx,evo,None))
+                if (evo.stage==2 and mon.card.stage==0 and not p.item_locked and
+                    self.line_map.get(evo.evolves_from.casefold(),'').casefold()==mon.card.name.casefold()):
+                    candy=next((c for c in p.hand if c.effect=='rare_candy'),None)
+                    if candy:
+                        available.append((idx,evo,candy))
+        return available
+
+    def _evolution_priority(self,p,idx,evo,candy):
+        mon=p.all_in_play()[idx]
+        zone=p.energy_types[0]
+        baseline=max((self.predicted_damage(mon,mon,a,len(p.bench))
+                     for a in mon.card.attacks if self._payable(mon,a)),default=0)
+        after=self._clone(mon);after.card=evo
+        powered=max((a.damage for a in evo.attacks if self._payable(after,a)),default=0)
+        reachable=max((a.damage*(0.62 if self._energy_shortfall(after,a,zone)==1 else 0.3)
+                   for a in evo.attacks if self._energy_shortfall(after,a,zone)<=2),default=0)
+        ability={'water_shuriken':34,'volt_charge':18,'ice_maker':18,
+                 'roar_in_unison':15}.get(evo.ability,0)
+        hp_gain=min(50,max(0,evo.hp-mon.card.hp))*0.20
+        return (1.25*(powered-baseline)+0.42*reachable+ability+hp_gain
+                +(13 if idx==0 else 4)-(9 if candy else 0))
+
+    def _execute_planned_evolutions(self,battle):
+        p=battle.players[battle.current]
+        # Re-evaluate after each actual legal evolution: avoids scheduling
+        # the same Stage-0 twice and respects one evolution per turn.
+        for _ in range(4):
+            candidates=self._evolution_candidates(battle)
+            if not candidates:
+                break
+            idx,evo,candy=max(candidates,
+                key=lambda item:(self._evolution_priority(p,*item),-item[0],item[1].id))
+            mon=p.all_in_play()[idx]
+            before=mon.card.name
+            if candy is not None:
+                battle.rare_candy(candy,mon,evo,self.line_map)
+            else:
+                battle.evolve(mon,evo)
+            self._turn_sequence_events.append({'kind':'evolution','from':before,
+                'to':evo.name,'slot':idx,'method':'rare_candy' if candy else 'regular'})
+            if battle.finished:
+                return
+
+    def _execute_planned_abilities(self,battle):
+        p=battle.players[battle.current]
+        foe=battle.players[1-battle.current]
+        if not foe.active:
+            return
+        for mon in list(p.all_in_play()):
+            if battle.finished or mon.ability_used_turn==battle.turn:
+                continue
+            ability=mon.card.ability
+            if ability=='water_shuriken':
+                victims=list(foe.all_in_play())
+                if not victims:
+                    continue
+                def target_value(victim):
+                    remain=victim.max_hp-victim.damage
+                    knockout=remain<=20
+                    can_finish=False
+                    if victim is foe.active and p.active:
+                        can_finish=any(self._can_reach(p.active,a,p.energy_types[0],int(not p.energy_used))
+                            and self.predicted_damage(p.active,victim,a,len(p.bench))>=remain-20
+                            and self.predicted_damage(p.active,victim,a,len(p.bench))<remain
+                            for a in p.active.card.attacks)
+                    return (165+55*victim.card.points if knockout else 0)+(
+                        55 if can_finish else 0)+min(20,remain)*0.85-(0 if victim is foe.active else 3)
+                victim=max(victims,key=target_value)
+                battle.use_ability(mon,victim)
+                self._turn_sequence_events.append({'kind':'ability','name':'water_shuriken',
+                    'user':mon.card.name,'target':victim.card.name})
+            elif ability=='volt_charge' and p.energy_types==('lightning',):
+                battle.use_ability(mon)
+                self._turn_sequence_events.append({'kind':'ability','name':ability})
+            elif (ability=='ice_maker' and p.energy_types==('water',) and p.active
+                  and p.active.card.element=='water'):
+                battle.use_ability(mon)
+                self._turn_sequence_events.append({'kind':'ability','name':ability})
+            elif (ability=='roar_in_unison' and p.energy_types==('darkness',)
+                  and mon.damage+30<mon.max_hp):
+                battle.use_ability(mon)
+                self._turn_sequence_events.append({'kind':'ability','name':ability})
+
+    def _bench_exposure(self, mon, enemy, foe_bench_count):
+        # Recognizes only attacks listed on the visible opponent Active.
+        # Bench snipe is a risk estimate, not an executed ability/attack.
+        remain=mon.max_hp-mon.damage
+        threat=0.0
+        for atk in enemy.card.attacks:
+            if not self._payable(enemy,atk):
+                continue
+            if atk.effect=='snipe_20_bench':
+                damage=20
+            elif atk.effect=='water_snipe_130_discard':
+                damage=130
+            else:
+                continue
+            threat=max(threat, min(remain,damage)*0.23 +
+                       (85+mon.card.points*30 if remain<=damage else 0))
+        return threat
+
+    def _sequence_options(self,p,foe,allow_energy=True,allow_retreat=True):
+        """Beam search on cloned in-play Pokémon; returns scored public plans.
+
+        Current turn: zero/one zone attachment, zero/one legal retreat,
+        zero/one payable attack. Next turn: known-hand evolution/ability and
+        zone attachment via the existing bounded future evaluator.
+        """
+        if not p.active or not foe.active:
+            return []
+        own_original=p.all_in_play()
+        enemy=foe.active
+        zone=p.energy_types[0]
+        can_attach=bool(allow_energy and not p.energy_used and len(p.energy_types)==1
+                       and not (self._context_battle.turn==0 and
+                       self._context_battle.current==self._context_battle.first)) if self._context_battle else bool(
+                        allow_energy and not p.energy_used and len(p.energy_types)==1)
+        options=[]
+        for attach in ([None]+list(range(min(len(own_original),self.MAX_OWN_BRANCHES)))
+                       if can_attach else [None]):
+            board=[self._clone(m) for m in own_original]
+            if attach is not None:
+                board[attach].energy.append(zone)
+            # Enumerate only *legal* retreats after any planned attachment.
+            retreat_opts=[None]
+            if allow_retreat and not p.retreated and p.active.status!='asleep' and p.bench:
+                cost=self._retreat_cost(board[0],p.retreat_discount)
+                if len(board[0].energy)>=cost:
+                    retreat_opts.extend(range(1,min(len(board),self.MAX_OWN_BRANCHES)))
+            for retreat in retreat_opts:
+                current=[self._clone(m) for m in board]
+                retreat_payment=0
+                if retreat is not None:
+                    retreat_payment=self._retreat_cost(current[0],p.retreat_discount)
+                    # Real retreat spends Energy from old Active, and the
+                    # promoted Bench becomes the new Active.
+                    current[0].energy=current[0].energy[retreat_payment:]
+                    active=current.pop(retreat)
+                    current.insert(0,active)
+                active=current[0]
+                attacks=[atk for atk in active.card.attacks if self._payable(active,atk)
+                         and active.status!='asleep']
+                if not attacks:
+                    attacks=[None]
+                immediate=max((self._attack_effect_value(active,enemy,atk,len(current)-1)[1]
+                               for atk in attacks if atk is not None),default=0)
+                setup=0.0
+                if attach is not None:
+                    residual,_=self._energy_residual(p,attach)
+                    setup=min(self.MAX_BENCH_SETUP,residual*0.48)
+                # Light lower-bound score for beam pruning; expensive public
+                # opponent/future projection is performed only on finalists.
+                quick=immediate + setup - (self.RETREAT_PENALTY+11*retreat_payment if retreat is not None else 0)
+                options.append({'attach':attach,'retreat':retreat,
+                    'board':current,'quick':quick,'setup':setup,
+                    'retreat_payment':retreat_payment,'attacks':attacks})
+        shortlisted=sorted(options,key=lambda x:(-x['quick'],
+                            x['attach'] if x['attach'] is not None else 99,
+                            x['retreat'] if x['retreat'] is not None else 99))[:self.BEAM_WIDTH]
+        scored=[]
+        for opt in shortlisted:
+            current=opt['board'];active=current[0]
+            for attack in opt['attacks']:
+                dmg,value,ko=(self._attack_effect_value(active,enemy,attack,len(current)-1)
+                              if attack is not None else (0.0,0.0,False))
+                # Guaranteed victory by public score / opponent no Bench.
+                if ko and (p.points+enemy.card.points>=3 or not foe.bench):
+                    score=850+40*enemy.card.points
+                    response='partida encerrada';future={'attack':'vitória'};harm=0.0
+                    survival=1.0
+                else:
+                    rivals=([self._clone(x) for x in foe.bench[:self.MAX_REPLY_BRANCHES]]
+                            if ko else [self._clone(enemy)])
+                    if not ko:
+                        rivals[0].damage+=int(dmg)
+                    future_paths=[]
+                    for rival in rivals:
+                        for harm_value,damage,reply_ko,reply_name in self._opponent_threat(
+                                  active,rival,len(current)-1,len(foe.bench)):
+                            survivors=[self._clone(m) for m in current]
+                            # Apply only supported, public self-costs to the
+                            # projected board. Do not claim spent Energy can
+                            # also power a second-turn attack.
+                            if attack is not None:
+                                if attack.effect=='discard_all_self_energy':
+                                    survivors[0].energy=[]
+                                elif attack.effect=='water_snipe_130_discard':
+                                    survivors[0].energy=[e for e in survivors[0].energy if e!='water']
+                                elif attack.effect in ('recoil_20','recoil_50'):
+                                    survivors[0].damage+=20 if attack.effect=='recoil_20' else 50
+                            survivors[0].damage+=int(damage)
+                            own_ko=survivors[0].damage>=survivors[0].max_hp
+                            if own_ko and (foe.points+active.card.points>=3 or len(current)==1):
+                                future={'score':0.0,'attack':'derrota projetada'}
+                                total=value-harm_value-850
+                            else:
+                                future=self._future_best(survivors,0,rival,p,zone,damage,own_ko)
+                                total=value-0.82*harm_value+self.FUTURE_WEIGHT*future['score']
+                            # Future supporting Pokémon only score if actually
+                            # present on this public board, not imaginary draws.
+                            exposure=sum(self._bench_exposure(mon,rival,len(foe.bench))
+                                for mon in survivors[1:])
+                            total-=min(38,exposure)*0.45
+                            # Losing attached energy on Active before attack
+                            # next turn incurs an extra, capped tempo cost.
+                            if own_ko:
+                                total-=min(33,9*len(current[0].energy))
+                            future_paths.append((total,harm_value,reply_name,future,own_ko))
+                    total,harm,response,future,reply_ko=min(future_paths,key=lambda x:x[0])
+                    score=total
+                    survival=0 if reply_ko else 1
+                score+=opt['setup']
+                score-=self.RETREAT_PENALTY+11*opt['retreat_payment'] if opt['retreat'] is not None else 0
+                if attack is None:
+                    score-=13
+                if opt['attach'] is not None:
+                    # Resource cost is paid once; residual bonus is capped.
+                    score-=2.0
+                scored.append({'score':round(score,3),'attach':opt['attach'],
+                     'retreat':opt['retreat'],'attack':attack,
+                     'attack_name':attack.name if attack is not None else 'passar sem ataque',
+                     'current_damage':round(dmg,2),'immediate_ko':ko,
+                     'survives_worst_visible_reply':bool(survival),'incoming_risk':round(harm,2),
+                     'response':response,'future_attack':future.get('attack','—'),
+                     'setup_bonus':round(opt['setup'],2),
+                     'retreat_cost':opt['retreat_payment'],
+                     'path':([f'energia→slot {opt["attach"]}'] if opt['attach'] is not None else [])+
+                            ([f'recuo→slot {opt["retreat"]}'] if opt['retreat'] is not None else [])+
+                            ([f'ataque→{attack.name}'] if attack is not None else ['passar'])})
+        return sorted(scored,key=lambda x:(-x['score'],
+               x['attach'] if x['attach'] is not None else 99,
+               x['retreat'] if x['retreat'] is not None else 99,
+               x['attack_name']))[:self.MAX_SEQUENCE_OPTIONS]
+
+    def _record_plan(self, p, plan, options, decision):
+        rows=[]
+        for rank,candidate in enumerate(options[:6]):
+            rows.append({'name':' → '.join(candidate['path']),
+                'choice_id':f'{decision}:path:{rank}',
+                'score':candidate['score'],
+                'incoming_risk':candidate['incoming_risk'],
+                'future_attack':candidate['future_attack'],
+                'survives_worst_visible_reply':candidate['survives_worst_visible_reply'],
+                'setup_bonus':candidate['setup_bonus']})
+        selected=rows[0] if rows else None
+        if selected:
+            self._note('sequence',selected,rows,
+                 'Beam limitado, ações legais, resposta adversária visível, próximo turno e risco de perder atacante')
+        self._last_integrated_plan={'turn':self._context_battle.turn if self._context_battle else None,
+           'decision':decision,'plan':plan['path'],'score':plan['score'],
+           'future_attack':plan['future_attack'],'incoming_risk':plan['incoming_risk']}
+
+    def select_energy_target(self,player):
+        b=self._context_battle
+        if b is None or not player.active or len(player.energy_types)!=1:
+            return super().select_energy_target(player)
+        foe=b.players[1-b.current]
+        options=self._sequence_options(player,foe)
+        if not options:
+            return super().select_energy_target(player)
+        plan=options[0]
+        self._record_plan(player,plan,options,'before_energy')
+        rows=[]
+        for idx,piece in enumerate(options[:6]):
+            rows.append({'name':'não anexar' if piece['attach'] is None else player.all_in_play()[piece['attach']].card.name,
+                  'choice_id':f'energy:plan:{idx}','index':piece['attach'],
+                  'score':piece['score'],'next_attack':piece['future_attack'],
+                  'incoming_risk':piece['incoming_risk']})
+        chosen=rows[0]
+        self._note('energy',chosen,rows,'Energia selecionada pela sequência integrada (até dois turnos), não isoladamente')
+        return player.all_in_play()[plan['attach']] if plan['attach'] is not None else None
+
+    def _retreat_option(self,battle):
+        p=battle.players[battle.current];foe=battle.players[1-battle.current]
+        if not p.active or not p.bench or p.retreated or p.active.status=='asleep':
+            return None
+        options=self._sequence_options(p,foe,allow_energy=False)
+        if not options:
+            return None
+        # Re-evaluation after actual attachments/supporters; never execute a
+        # stale plan against a state that has changed since energy selection.
+        plan=options[0]
+        self._record_plan(p,plan,options,'after_energy')
+        rows=[{'name':'manter ativo' if x['retreat'] is None else p.all_in_play()[x['retreat']].card.name,
+               'choice_id':f'retreat:plan:{idx}', 'score':x['score']}
+              for idx,x in enumerate(options[:6])]
+        self._note('retreat',rows[0],rows,'Recuo avaliado junto ao ataque e resposta provável; custo de energia pago')
+        return p.all_in_play()[plan['retreat']] if plan['retreat'] is not None else None
+
+    def _choose_attack(self,battle,viable):
+        p=battle.players[battle.current];foe=battle.players[1-battle.current]
+        options=self._sequence_options(p,foe,allow_energy=False,allow_retreat=False)
+        candidates=[row for row in options if row['attack'] in viable]
+        if not candidates:
+            return super()._choose_attack(battle,viable)
+        best=candidates[0]
+        rows=[{'name':row['attack_name'],'choice_id':f'attack:path:{idx}',
+                'score':row['score'],'incoming_risk':row['incoming_risk'],
+                'next_attack':row['future_attack']} for idx,row in enumerate(candidates[:6])]
+        self._note('attack',rows[0],rows,'Ataque escolhido pelo resultado da sequência com resposta inimiga')
+        return best['attack']
+
+    def play_turn(self,battle):
+        self._turn_sequence_events=[]
+        self._last_integrated_plan=None
+        result=super().play_turn(battle)
+        if self._execution_route != 'planning_v099_guardrail_all_basic':
+            if self._turn_sequence_events and len(self.decision_records)<50:
+                self.decision_records.append({'turn':battle.turn,'player':1-battle.current,
+                    'decision':'sequence_preparation',
+                    'chosen':'evoluções e habilidades legais do turno',
+                    'events':self._turn_sequence_events[:8],
+                    'reason':'Ordem das ações reavaliada por prontidão e benefício público'})
+        return result

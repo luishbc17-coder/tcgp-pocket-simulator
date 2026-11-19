@@ -1,4 +1,4 @@
-"""Dated 20-card sample lists for FORTY-ONE Pocket archetypes (consulted through 2026-11-17).
+"""Dated 20-card sample lists for FORTY-SIX Pocket archetypes (consulted through 2026-11-17).
 
 IDs are the lowercase PocketDecks v5 IDs, NOT the display-style P-A-005.
 These are community consensus samples; they are not a particular tournament winner.
@@ -667,7 +667,67 @@ DECKS = {
  'source_checked': '2026-11-17',
  'release_stage': 'catalog_only',
  'simulation_blocked_reason': 'Habilidades, ataques, ferramentas ou condições de energia ainda não '
-                              'homologados para simulação no motor parcial.'}
+                              'homologados para simulação no motor parcial.'},
+    'bellibolt_pawmot': {
+        'name': 'Bellibolt ex / Pawmot',
+        'energy_types': ['lightning'],
+        'source': 'https://www.pokemontcgpocket.app/en/deck/bellibolt-ex-b2a-pawmot-c1',
+        'source_checked': '2026-11-17',
+        'sample_through': '2026-11-16',
+        'sample_size': 2,
+        'description': '2 public deck samples; early signal.',
+        'release_stage': 'catalog_only',
+        'simulation_blocked_reason': 'Lista ilustrativa com amostra pequena; habilidades, ataques e treinadores ainda não homologados no motor parcial.',
+        'cards': {'b2-056': 2, 'b2a-042': 2, 'c1-050': 2, 'a3-066': 1, 'b3a-014': 1, 'c1-048': 1, 'a3-144': 2, 'pa-007': 2, 'b1-225': 2, 'pa-005': 2, 'a2-150': 1, 'b1-226': 1, 'b2-145': 1},
+    },
+    'mega_dragonite_suicune': {
+        'name': 'Mega Dragonite ex / Suicune ex',
+        'energy_types': ['water'],
+        'source': 'https://www.pokemontcgpocket.app/en/deck/mega-dragonite-ex-c1-suicune-ex-a4a',
+        'source_checked': '2026-11-17',
+        'sample_through': '2026-11-16',
+        'sample_size': 2,
+        'description': '2 public deck samples; dual-energy-card mechanics require verification.',
+        'release_stage': 'catalog_only',
+        'simulation_blocked_reason': 'Lista ilustrativa com amostra pequena; habilidades, ataques e treinadores ainda não homologados no motor parcial.',
+        'cards': {'a4a-020': 2, 'c1-098': 2, 'c1-100': 1, 'b2b-052': 1, 'b4-117': 1, 'a1-185': 1, 'a2b-035': 1, 'pa-005': 2, 'pa-007': 2, 'a2-147': 1, 'b1-223': 1, 'a2a-072': 1, 'a2b-070': 1, 'a4-157': 1, 'a4a-068': 1, 'b1-225': 1},
+    },
+    'mega_lopunny_lopunny': {
+        'name': 'Mega Lopunny ex / Lopunny',
+        'energy_types': ['fighting'],
+        'source': 'https://www.pokemontcgpocket.app/en/deck/mega-lopunny-ex-b1a-lopunny-c1',
+        'source_checked': '2026-11-17',
+        'sample_through': '2026-11-16',
+        'sample_size': 3,
+        'description': '3 public deck samples; alternate secondary fire line Scorbunny/Raboot.',
+        'release_stage': 'catalog_only',
+        'simulation_blocked_reason': 'Lista ilustrativa com amostra pequena; habilidades, ataques e treinadores ainda não homologados no motor parcial.',
+        'cards': {'c1-115': 2, 'c1-116': 2, 'c1-022': 2, 'c1-023': 2, 'b1a-042': 1, 'pa-007': 2, 'pa-005': 2, 'a4-156': 1, 'b1-225': 1, 'a1-225': 1, 'a2-147': 1, 'a2a-073': 1, 'b2-150': 1, 'pa-002': 1},
+    },
+    'mega_lucario_lycanroc': {
+        'name': 'Mega Lucario ex / Lycanroc ex',
+        'energy_types': ['fighting'],
+        'source': 'https://www.pokemontcgpocket.app/en/deck/mega-lucario-ex-b3-lycanroc-ex-c1',
+        'source_checked': '2026-11-17',
+        'sample_through': '2026-11-16',
+        'sample_size': 3,
+        'description': '3 public deck samples; stadium and trainer effects not certified.',
+        'release_stage': 'catalog_only',
+        'simulation_blocked_reason': 'Lista ilustrativa com amostra pequena; habilidades, ataques e treinadores ainda não homologados no motor parcial.',
+        'cards': {'a2-091': 2, 'b3-081': 2, 'a2-092': 1, 'c1-080': 1, 'a3-098': 1, 'b3-078': 1, 'c1-079': 1, 'pa-005': 2, 'pa-007': 2, 'b3-154': 1, 'a2-150': 1, 'b1-225': 1, 'b3-149': 1, 'pa-002': 1, 'a2-148': 1, 'a1-225': 1},
+    },
+    'solgaleo_melmetal': {
+        'name': 'Solgaleo ex / Melmetal',
+        'energy_types': ['metal'],
+        'source': 'https://www.pokemontcgpocket.app/en/deck/solgaleo-ex-a3-melmetal-c1',
+        'source_checked': '2026-11-17',
+        'sample_through': '2026-11-16',
+        'sample_size': 2,
+        'description': '2 public deck samples; Metal Core Barrier requires unsupported mechanics.',
+        'release_stage': 'catalog_only',
+        'simulation_blocked_reason': 'Lista ilustrativa com amostra pequena; habilidades, ataques e treinadores ainda não homologados no motor parcial.',
+        'cards': {'a3-122': 2, 'a3-085': 2, 'a1-181': 1, 'b2-110': 1, 'b2-111': 1, 'c1-097': 1, 'a3-144': 2, 'b2-148': 2, 'pa-005': 2, 'pa-007': 2, 'a2-150': 1, 'b1-225': 1, 'c1-127': 1, 'a2-146': 1},
+    },
 }
 
 
