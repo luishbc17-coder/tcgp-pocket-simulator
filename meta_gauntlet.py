@@ -13,6 +13,7 @@ from matchup_compatibility import inspect_deck, load_compiled_deck
 from deck_identity import describe_selection, compare_decks
 from batch_runner import run_technical_batch
 from gameplay_catalog import evolution_line_map
+from limitless_meta import evaluate_reference_coverage
 
 MAX_GAMES_PER_OPPONENT = 250
 MAX_TOTAL_GAMES = 3000
@@ -132,7 +133,8 @@ def run_meta_gauntlet(player_payload: dict, opponents: dict[str, dict],
             progress(rounds_done, total)
     completed = sum(row['completed'] for row in result)
     return {
-        'kind': 'technical_meta_gauntlet', 'version': '0.9.3',
+        'kind': 'technical_meta_gauntlet', 'version': '0.9.13',
+        'limitless_reference': evaluate_reference_coverage(result),
         'validated_competitive': False,
         'disclaimer': ('Dados técnicos de políticas heurísticas e efeitos parciais, '
                        'não probabilidades reais de vitória no metagame.'),

@@ -1345,3 +1345,68 @@ class PlanningAgentV0912(PlanningAgentV0911):
                     'events':self._turn_sequence_events[:8],
                     'reason':'Ordem das ações reavaliada por prontidão e benefício público'})
         return result
+
+
+class PlanningAgentV09121(PlanningAgentV0912):
+    """v0.9.12.1: preserve the historical sequence planner and guard risky retreats.
+
+    A retreat must improve the same public-state plan by a meaningful margin.
+    A smaller margin is accepted only to escape visible lethal pressure or to
+    execute an immediate knockout with the promoted attacker.
+    """
+    policy_name = 'planning_v09121'
+    RETREAT_MIN_GAIN = 18.0
+    TACTICAL_RETREAT_MIN_GAIN = 3.0
+
+    def _record_plan(self, p, plan, options, decision):
+        # The guardrail can deliberately select a lower-scoring stay action.
+        # The audit must expose the *executed* plan as chosen, not option[0].
+        if options and plan is not options[0]:
+            options = [plan] + [row for row in options if row is not plan]
+        return super()._record_plan(p, plan, options, decision)
+
+    def _retreat_option(self, battle):
+        p = battle.players[battle.current]
+        foe = battle.players[1 - battle.current]
+        if not p.active or not foe.active or not p.bench or p.retreated or p.active.status == 'asleep':
+            return None
+        options = self._sequence_options(p, foe, allow_energy=False)
+        if not options:
+            return None
+        best_stay = next((v for v in options if v['retreat'] is None), None)
+        best_move = next((v for v in options if v['retreat'] is not None), None)
+        if best_stay is None or best_move is None:
+            return None
+        # Do not force a retreat on a tiny heuristic margin. Values already
+        # account for paid energy and the visible enemy's response.
+        escape_lethal = not best_stay['survives_worst_visible_reply'] and best_move['survives_worst_visible_reply']
+        tactical_ko = bool(best_move['immediate_ko'] and not best_stay['immediate_ko'])
+        required = (self.TACTICAL_RETREAT_MIN_GAIN if (escape_lethal or tactical_ko)
+                    else self.RETREAT_MIN_GAIN)
+        gain = best_move['score'] - best_stay['score']
+        selected = best_move if gain >= required else best_stay
+        self._record_plan(p, selected, options, 'after_energy')
+        rows = [
+            {'name': 'manter ativo', 'choice_id':'retreat:stay', 'score':best_stay['score'],
+             'survives_worst_visible_reply':best_stay['survives_worst_visible_reply']},
+            {'name': 'recuar para slot ' + str(best_move['retreat']),
+             'choice_id':'retreat:slot:'+str(best_move['retreat']),
+             'score':best_move['score'],
+             'survives_worst_visible_reply':best_move['survives_worst_visible_reply']},
+        ]
+        chosen_id = 'retreat:stay' if selected is best_stay else 'retreat:slot:'+str(best_move['retreat'])
+        chosen = next(x for x in rows if x['choice_id']==chosen_id)
+        self._note('retreat', chosen, rows,
+            f'v0.9.12.1: vantagem projetada {gain:.2f}; exigida {required:.2f}; '
+            f'escapar nocaute={escape_lethal}; nocaute imediato={tactical_ko}')
+        return p.all_in_play()[selected['retreat']] if selected['retreat'] is not None else None
+
+
+class PlanningAgentV0913(PlanningAgentV09121):
+    """v0.9.13 integrated planner, retaining the v0.9.12.1 retreat guard.
+
+    A separate class preserves frozen baselines in policy duels and makes
+    future learning/optimization changes versionable without rewriting the
+    results produced by historical versions.
+    """
+    pass

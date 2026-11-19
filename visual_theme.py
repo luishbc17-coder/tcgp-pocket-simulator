@@ -6,7 +6,7 @@ markup is independently testable. Never trust deck/card display strings as HTML.
 from __future__ import annotations
 from html import escape
 
-VERSION = '0.9.12'
+VERSION = '0.9.13'
 ENERGY_META = {
     'water': ('💧', 'Água'),
     'fire': ('🔥', 'Fogo'),

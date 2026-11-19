@@ -14,13 +14,13 @@ from battle_engine import Card, RuleAgent, RuleError, UnsupportedEffect, validat
 from batch_runner import verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgent, StrategicAgentV097
-from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911, PlanningAgentV0912
+from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911, PlanningAgentV0912, PlanningAgentV09121, PlanningAgentV0913
 from battle_metrics import count_logged_actions, new_telemetry, serialize_telemetry
 from matrix_insights import score_interval
 from duel_insights import duel_efficiency
 
 POLICIES = {'baseline':RuleAgent, 'tactical':TacticalAgent,
-            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0912, 'planning_v0911':PlanningAgentV0911, 'planning_v0910':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
+            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0913, 'planning_v09121':PlanningAgentV09121, 'planning_v0912':PlanningAgentV0912, 'planning_v0911':PlanningAgentV0911, 'planning_v0910':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
 MAX_HEAD_TO_HEAD_GAMES = 400
 
 
@@ -31,8 +31,8 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
                   progress: Callable[[int,int],None] | None = None,
                   keep_replay: bool = False, benchmark_split: str = 'development',
                   deck_name: str | None = None) -> dict:
-    if policy_a not in POLICIES or policy_b not in POLICIES or policy_a == policy_b:
-        raise ValueError('Escolha duas políticas de IA diferentes e reconhecidas')
+    if policy_a not in POLICIES or policy_b not in POLICIES:
+        raise ValueError('Escolha duas políticas de IA reconhecidas')
     if type(games) is not int or not 4 <= games <= MAX_HEAD_TO_HEAD_GAMES or games % 4:
         raise ValueError('Use um número de partidas múltiplo de 4 entre 4 e 400')
     if type(seed) is not int or seed < 0:
@@ -143,9 +143,31 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
     ci=score_interval(wins['a'],wins['b'],wins['draw']) if complete else None
     scenario_intervals = {key:score_interval(value['a'],value['b'],value['draw'])
                           for key,value in sides.items()} if complete else None
-    return {'kind':'technical_policy_duel','version':'0.9.12','validated_competitive':False,
+    self_play = policy_a == policy_b
+    first_wins = sum(1 for r in rounds if r['winner'] == r['first_player'])
+    second_wins = sum(1 for r in rounds if r['winner'] is not None and r['winner'] != r['first_player'])
+    first_interval = score_interval(first_wins, second_wins, completed-first_wins-second_wins) if complete else None
+    selfplay_diagnostics = ({
+        'same_policy_on_both_sides': True,
+        'first_player_wins': first_wins,
+        'second_player_wins': second_wins,
+        'first_player_score_interval': first_interval,
+        'starting_position_signal': ('second_player_advantage_in_this_sample'
+            if first_interval and first_interval['upper_pct'] < 50 else
+            'first_player_advantage_in_this_sample'
+            if first_interval and first_interval['lower_pct'] > 50 else
+            'inconclusive'),
+        'player_zero_wins': sum(1 for r in rounds if r['winner'] == 0),
+        'player_one_wins': sum(1 for r in rounds if r['winner'] == 1),
+        'draws': completed-first_wins-second_wins,
+        'interpretation': 'Resultado de IA contra clone idêntico mede assimetria de turno/assento e comportamento observado; 50% não demonstra força nem treinamento.',
+        'seed_limitations': 'Sementes diferentes por partida; não são duelos contrafactuais emparelhados sob aleatoriedade idêntica.',
+    } if self_play else None)
+    return {'kind':'technical_policy_duel','version':'0.9.13','validated_competitive':False,
             'disclaimer':'Benchmark de políticas heurísticas com baralho espelhado, não prova de força contra humanos ou no meta.',
             'policy_a':policy_a,'policy_b':policy_b,'seed':seed,
+            'mode':'self_play' if self_play else 'head_to_head',
+            'self_play_diagnostics':selfplay_diagnostics,
             'deck_name':deck_name or 'Baralho espelhado (nome não informado)',
             'effective_seed': effective_seed, 'benchmark_split':benchmark_split,
             'seed_note':'Conjuntos development e holdout usam faixas de sementes sem sobreposição; sementes iguais não garantem estados RNG idênticos após decisões distintas.',

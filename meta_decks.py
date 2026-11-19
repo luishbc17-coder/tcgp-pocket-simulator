@@ -1,4 +1,4 @@
-"""Dated 20-card sample lists for FORTY-SIX Pocket archetypes (consulted through 2026-11-17).
+"""Dated 20-card sample lists for FIFTY-ONE Pocket archetypes (consulted through 2026-11-17).
 
 IDs are the lowercase PocketDecks v5 IDs, NOT the display-style P-A-005.
 These are community consensus samples; they are not a particular tournament winner.
@@ -728,6 +728,59 @@ DECKS = {
         'simulation_blocked_reason': 'Lista ilustrativa com amostra pequena; habilidades, ataques e treinadores ainda não homologados no motor parcial.',
         'cards': {'a3-122': 2, 'a3-085': 2, 'a1-181': 1, 'b2-110': 1, 'b2-111': 1, 'c1-097': 1, 'a3-144': 2, 'b2-148': 2, 'pa-005': 2, 'pa-007': 2, 'a2-150': 1, 'b1-225': 1, 'c1-127': 1, 'a2-146': 1},
     },
+    # v0.9.13: off-meta experimental starting points, community-aggregated 20-card
+    # consensus lists (not tournament winners); battle-engine compatibility blocked.
+    'mega_dragonite_dragonite': {
+        'name': 'Mega Dragonite ex / Dragonite', 'energy_types':['water'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/mega-dragonite-ex-c1-dragonite-a1',
+        'source_checked':'2026-11-19','sample_through':'2026-11-18','sample_size':14,
+        'release_stage':'catalog_only','description':'Construção alternativa com Dragonite; adaptada do consenso público para cumprir máximo de 2 Dratini por nome (um substituído por Lucky Ice Pop, alternativa citada na fonte).',
+        'simulation_blocked_reason':'Ataques, energia e efeitos ainda não homologados no motor.',
+        'cards':{'c1-100':2,'a1-185':1,'a4-066':1,'b2b-052':1,'a1-183':1,
+                 'c1-098':1,'a4a-023':1,'b2-145':1,'pa-005':2,'pa-007':2,
+                 'b1-225':2,'c1-127':1,'b4-153':1,'a3-144':1,'a2-147':1,'b3b-064':1},
+    },
+    'mega_venusaur_venusaur': {
+        'name':'Mega Venusaur ex / Venusaur','energy_types':['grass'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/mega-venusaur-ex-b1a-venusaur-c1',
+        'source_checked':'2026-11-19','sample_through':'2026-11-18','sample_size':12,
+        'release_stage':'catalog_only','description':'Variante off-meta com linha de Venusaur.',
+        'simulation_blocked_reason':'Quick-Grow Extract, ferramentas e estágios aguardam homologação.',
+        'cards':{'b1a-002':2,'b1a-004':1,'c1-003':1,'b1a-001':1,'a1-001':1,
+                 'b1a-067':2,'pa-007':2,'b2-145':2,'c1-127':1,'b1-225':1,
+                 'c1-126':1,'b1-219':1,'pa-005':1,'a3-147':1,'a1-219':1,'a2b-070':1},
+    },
+    'mega_diancie_carbink': {
+        'name':'Mega Diancie ex / Carbink','energy_types':['psychic'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/mega-diancie-ex-carbink-b3b',
+        'source_checked':'2026-11-19','sample_through':'2026-11-10','sample_size':16,
+        'release_stage':'catalog_only','description':'Linha psíquica pouco frequente no meta.',
+        'simulation_blocked_reason':'Estádios e habilidades ainda não homologados para duelo.',
+        'cards':{'b3b-031':2,'b3b-032':2,'b3b-035':1,'b1-225':2,'b2-155':2,
+                 'pa-005':2,'pa-007':2,'b2-145':1,'a2b-070':1,'c1-123':1,
+                 'a1-225':1,'a2-155':1,'b2-154':1,'a2-147':1},
+    },
+    'paldean_clodsire_koraidon': {
+        'name':'Paldean Clodsire / Koraidon ex','energy_types':['fighting'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/paldean-clodsire-c1-koraidon-ex-b3a',
+        'source_checked':'2026-11-19','sample_through':'2026-11-02','sample_size':17,
+        'release_stage':'catalog_only','description':'Estratégia de Paldean Clodsire pouco popular.',
+        'simulation_blocked_reason':'Rika e condições de combate ainda não homologadas.',
+        'cards':{'c1-073':2,'c1-074':2,'b3a-036':1,'b4a-064':1,'b3b-061':1,
+                 'c1-128':2,'pa-007':2,'pa-005':2,'b1-225':1,'b3-154':1,
+                 'b3-149':1,'a2-150':1,'c1-127':1,'b2-145':1,'pa-002':1},
+    },
+    'gengar_igglybuff': {
+        'name':'Gengar / Igglybuff','energy_types':['darkness'],
+        'source':'https://www.pokemontcgpocket.app/en/deck/gengar-c1-igglybuff-a4a',
+        'source_checked':'2026-11-19','sample_through':'2026-11-13','sample_size':14,
+        'release_stage':'catalog_only','description':'Gengar de baixa participação no meta.',
+        'simulation_blocked_reason':'Sono, habilidades e demais interações requerem homologação.',
+        'cards':{'a4a-059':2,'b2b-040':2,'c1-083':2,'b2b-037':1,'a2a-031':1,
+                 'a3-144':2,'pa-007':2,'pa-005':2,'b1-225':1,'a2-150':1,
+                 'b4-148':1,'c1-127':1,'pa-002':1,'b1-226':1},
+    },
+
 }
 
 

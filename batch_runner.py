@@ -14,7 +14,7 @@ from battle_audit import AuditedBattle, StateInvariantError, snapshot
 from deck_identity import describe_compiled, compare_decks
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgentV097
-from planning_agent import PlanningAgentV0911
+from planning_agent import PlanningAgentV0913
 from battle_metrics import count_logged_actions, merge_telemetry, new_telemetry, serialize_telemetry, duration_distribution
 
 MAX_BATCH_GAMES = 1_000
@@ -80,7 +80,7 @@ def run_technical_batch(left: list[Card], right: list[Card],
     total_actions = 0
     total_turns = 0
     replay = None
-    agent = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0911}[agent_mode](line_map or {})
+    agent_type = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0913}[agent_mode]
     telemetry = new_telemetry()
     start_time = monotonic()
     for idx in range(games):
@@ -92,13 +92,17 @@ def run_technical_batch(left: list[Card], right: list[Card],
         ea, eb = (right_e, left_e) if reverse else (left_e, right_e)
         battle = None
         try:
+            # Independent agents per player AND per game: no hidden policy state
+            # can leak between simulated opponents or consecutive matches.
+            agents = (agent_type(line_map or {}), agent_type(line_map or {}))
+            for seat, roster in enumerate((a, b)):
+                if hasattr(agents[seat], 'configure_own_deck'):
+                    agents[seat].configure_own_deck(roster)
             battle = AuditedBattle(a, b, ea, eb, seed=seed + idx,
                                    force_first=first_side,
                                    collect_trace=keep_replay and idx == 0)
             while not battle.finished:
-                if hasattr(agent,'configure_own_deck'):
-                    agent.configure_own_deck(a if battle.current==0 else b)
-                agent.play_turn(battle)
+                agents[battle.current].play_turn(battle)
             if battle.winner is None:
                 outcome = 'draw'
             elif battle.winner == left_side:
@@ -192,7 +196,7 @@ def compare_policies(left: list[Card], right: list[Card],
     baseline = run_technical_batch(left, right, agent_mode='baseline', **opts)
     tactical = run_technical_batch(left, right, agent_mode='tactical', **opts)
     return {
-        'kind': 'technical_policy_comparison', 'version': '0.9.0',
+        'kind': 'technical_policy_comparison', 'version': '0.9.13',
         'validated_competitive': False,
         'disclaimer': ('Comparação de comportamento, não medição causal de força: '
                        'as jogadas alteram a trajetória aleatória subsequente.'),
