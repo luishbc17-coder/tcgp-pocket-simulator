@@ -82,7 +82,7 @@ def evaluate_candidate_field(candidates: list[dict], opponents: dict[str,dict],
     if comparable:
         for rank,row in enumerate(sorted(eligible,key=lambda r:(-r['technical_weighted_score_pct'],r['name'])),1):
             row['rank']=rank
-    return {'kind':'offmeta_candidate_gauntlet','version':'0.9.13',
+    return {'kind':'offmeta_candidate_gauntlet','version':'0.9.14',
             'reference':{'provider':'Play Limitless','observed_on':snapshot.get('observed_on'),
                          'source_url':snapshot['source_url']},
             'ranked':comparable,'games_per_opponent':games_per_opponent,'seed':seed,

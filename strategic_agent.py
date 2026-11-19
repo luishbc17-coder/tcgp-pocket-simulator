@@ -193,6 +193,8 @@ class StrategicAgentV097(StrategicAgent):
         if (attacker.card.name.casefold().endswith(' ex') and
                 opponent.card.ability == 'safeguard_ex'):
             return 0.0
+        if opponent.card.ability == 'fur_coat':
+            amount = max(0, amount - 20)
         if (opponent.tool is not None and opponent.tool.effect == 'eviolite'
                 and opponent.card.stage == 0):
             amount = max(0, amount - 20)
@@ -206,6 +208,10 @@ class StrategicAgentV097(StrategicAgent):
         ko = damage >= remaining and damage > 0
         # Score realized damage, with an explicit premium for taking prize points.
         value = 0.95 * min(damage, remaining) + (195 + 65 * max(0, opponent.card.points - 1) if ko else 0)
+        if attack.effect == 'draw_1':
+            value += 28
+        if attack.effect == 'zone_water_to_two_bench':
+            value += 32*min(2,len(bench))
         if attack.effect == 'snipe_20_bench' and bench:
             value += 12
         if attack.effect == 'water_snipe_130_discard':

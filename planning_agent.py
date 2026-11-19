@@ -1402,6 +1402,23 @@ class PlanningAgentV09121(PlanningAgentV0912):
         return p.all_in_play()[selected['retreat']] if selected['retreat'] is not None else None
 
 
+class PlanningAgentV0914(PlanningAgentV09121):
+    """v0.9.14 engine-aware policy, retaining v0.9.12.1 retreat guard.
+
+    Lote Água abilities are executed through the common legal action driver.
+    Historical policies remain selectable for regression comparisons.
+    """
+    policy_name = 'planning_v0914'
+
+    def _attack_effect_value(self, attacker, foe, attack, bench_count):
+        damage, value, ko = super()._attack_effect_value(attacker, foe, attack, bench_count)
+        if attack.effect == 'draw_1':
+            value += 28  # public utility estimate; actual draw remains hidden
+        elif attack.effect == 'zone_water_to_two_bench':
+            value += 32 * min(2, bench_count)  # never invent bench targets
+        return damage, value, ko
+
+
 class PlanningAgentV0913(PlanningAgentV09121):
     """v0.9.13 integrated planner, retaining the v0.9.12.1 retreat guard.
 

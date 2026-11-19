@@ -153,6 +153,25 @@ class TacticalAgent(RuleAgent):
                 targets.append((new - old, mon))
         return max(targets, key=lambda x: x[0])[1] if targets else None
 
+    @staticmethod
+    def _water_transfer_when_useful(battle: Battle):
+        """Use repeatable Wash Out with only visible, own resources."""
+        p = battle.players[battle.current]
+        if not p.active or p.active.card.element != 'water':
+            return
+        user = next((mon for mon in p.all_in_play() if mon.card.ability == 'wash_out'), None)
+        if user is None:
+            return
+        budget = sum(mon.energy.count('water') for mon in p.bench)
+        for _ in range(budget):
+            if any(battle.can_pay_energy(p.active, atk) for atk in p.active.card.attacks):
+                break
+            donors = [mon for mon in p.bench if mon.card.element == 'water' and 'water' in mon.energy]
+            if not donors:
+                break
+            donor = max(donors, key=lambda mon: (mon.energy.count('water'), mon.max_hp - mon.damage))
+            battle.use_ability(user, donor)
+
     def play_turn(self, battle: Battle):
         i = battle.current
         p, foe = battle.players[i], battle.players[1-i]
@@ -174,6 +193,14 @@ class TacticalAgent(RuleAgent):
             if card.kind == 'stadium' and not p.stadium_used and (not battle.stadium or battle.stadium.name != card.name):
                 battle.play_stadium(card)
                 break
+        # Trade a hand Pokémon with a random deck Pokémon via the exact
+        # Pokémon Communication rule, not a selective hidden-deck peek.
+        if not p.item_locked:
+            trade=next((c for c in p.hand if c.effect=='pokemon_communication'),None)
+            if trade and any(c.kind=='pokemon' for c in p.hand if c is not trade) and \
+                    any(c.kind=='pokemon' for c in p.deck):
+                battle.play_trainer(trade)
+
         # Tool attachment: Deceptive Needle has an effect only on a Darkness
         # Pokemon in the Active Spot; don't waste it on a non-Dark Pokemon.
         for card in [c for c in list(p.hand) if c.kind == 'tool']:
@@ -235,6 +262,7 @@ class TacticalAgent(RuleAgent):
             if (card.effect == 'flame_patch' and not p.item_locked and p.active
                     and p.active.card.element == 'fire' and p.energy_discard['fire'] > 0):
                 battle.play_trainer(card)
+        self._water_transfer_when_useful(battle)
         ability_hook = getattr(self, '_execute_planned_abilities', None)
         if ability_hook is not None:
             ability_hook(battle)
@@ -261,6 +289,18 @@ class TacticalAgent(RuleAgent):
                 elif (mon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
                       and mon.damage + 30 < mon.max_hp):
                     battle.use_ability(mon)
+
+        # Misty is a Supporter: spend it to accelerate an own Water Pokémon
+        # with a not-yet-payable attack. Coin results come only from Battle.rng.
+        if not p.supporter_used and p.energy_types==('water',):
+            misty=next((c for c in p.hand if c.effect=='misty'),None)
+            water=[mon for mon in p.all_in_play() if mon.card.element=='water']
+            targets=[mon for mon in water if not any(battle.can_pay_energy(mon,a)
+                      for a in mon.card.attacks)]
+            if misty and targets:
+                target=max(targets,key=lambda mon:(mon is p.active,
+                    max((a.damage for a in mon.card.attacks),default=0),-len(mon.energy)))
+                battle.play_trainer(misty,target=target)
 
         # Draw support first if the hand is shallow; a preserved Cyrus can turn
         # an otherwise weak attack into an immediate KO after energy attachment.
@@ -364,6 +404,18 @@ class TacticalAgent(RuleAgent):
                 x_speed = next(c for c in p.hand if c.effect == 'x_speed')
                 battle.play_trainer(x_speed)
                 battle.retreat(candidate)
+
+        # A newly promoted Water Active can receive energy from Vaporeon
+        # after the retreat. Repeatable transfers stop once an attack is payable.
+        self._water_transfer_when_useful(battle)
+        if not p.item_locked:
+            for bag in [c for c in list(p.hand) if c.effect=='eevee_bag']:
+                line=[mon for mon in p.all_in_play() if mon.card.evolves_from.casefold()=='eevee']
+                if sum(min(20,mon.damage) for mon in line)>=20:
+                    battle.play_trainer(bag,option='heal')
+                elif (p.active in line and p.active.status!='asleep' and
+                        any(battle.can_pay_energy(p.active,a) for a in p.active.card.attacks)):
+                    battle.play_trainer(bag,option='boost')
 
         if p.active and p.active.status != 'asleep':
             viable = [a for a in p.active.card.attacks if battle.can_pay_energy(p.active, a)]

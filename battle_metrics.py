@@ -84,6 +84,27 @@ def count_logged_actions(events: list[str]) -> dict[int, dict]:
             if 'Rare Candy:' in event:
                 stats[side]['rare_candy'] += 1
             continue
+        # New Water-batch effects are counted only when their *observed log*
+        # exists. Transfers are NOT Zone attachments and Checkup is NOT attack.
+        if event.startswith(('P0 Wash Out:', 'P1 Wash Out:')):
+            stats[int(event[1])]['wash_out_transfers'] += 1
+            continue
+        if event.startswith(('P0 Eevee Bag heals ', 'P1 Eevee Bag heals ')):
+            stats[int(event[1])]['eevee_bag_heal_actions'] += 1
+            continue
+        if event.startswith(('P0 Eevee Bag: ', 'P1 Eevee Bag: ')):
+            stats[int(event[1])]['eevee_bag_boost_actions'] += 1
+            continue
+        if event.startswith(('P0 Pokémon Communication:', 'P1 Pokémon Communication:')):
+            stats[int(event[1])]['pokemon_communication_uses'] += 1
+            continue
+        if event.startswith(('P0 Misty:', 'P1 Misty:')):
+            stats[int(event[1])]['misty_uses'] += 1
+            continue
+        if event.startswith('Pokémon Checkup: P') and ' Snowy Terrain ->' in event:
+            owner=int(event[len('Pokémon Checkup: P')])
+            stats[owner]['snowy_terrain_triggers'] += 1
+            continue
         if event.startswith('Greninja — Water Shuriken:'):
             target = re.search(r'to P([01])', event)
             if target:

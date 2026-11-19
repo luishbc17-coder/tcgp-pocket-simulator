@@ -14,13 +14,13 @@ from battle_engine import Card, RuleAgent, RuleError, UnsupportedEffect, validat
 from batch_runner import verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgent, StrategicAgentV097
-from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911, PlanningAgentV0912, PlanningAgentV09121, PlanningAgentV0913
+from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911, PlanningAgentV0912, PlanningAgentV09121, PlanningAgentV0913, PlanningAgentV0914
 from battle_metrics import count_logged_actions, new_telemetry, serialize_telemetry
 from matrix_insights import score_interval
 from duel_insights import duel_efficiency
 
 POLICIES = {'baseline':RuleAgent, 'tactical':TacticalAgent,
-            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0913, 'planning_v09121':PlanningAgentV09121, 'planning_v0912':PlanningAgentV0912, 'planning_v0911':PlanningAgentV0911, 'planning_v0910':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
+            'strategic':StrategicAgentV097, 'strategic_v096':StrategicAgent, 'planning':PlanningAgentV0914, 'planning_v0913':PlanningAgentV0913, 'planning_v09121':PlanningAgentV09121, 'planning_v0912':PlanningAgentV0912, 'planning_v0911':PlanningAgentV0911, 'planning_v0910':PlanningAgentV0910, 'planning_v099':PlanningAgentV099, 'planning_v098':PlanningAgentV098}
 MAX_HEAD_TO_HEAD_GAMES = 400
 
 
@@ -163,7 +163,7 @@ def duel_policies(cards: list[Card], energy_types: tuple[str,...],
         'interpretation': 'Resultado de IA contra clone idêntico mede assimetria de turno/assento e comportamento observado; 50% não demonstra força nem treinamento.',
         'seed_limitations': 'Sementes diferentes por partida; não são duelos contrafactuais emparelhados sob aleatoriedade idêntica.',
     } if self_play else None)
-    return {'kind':'technical_policy_duel','version':'0.9.13','validated_competitive':False,
+    return {'kind':'technical_policy_duel','version':'0.9.14','validated_competitive':False,
             'disclaimer':'Benchmark de políticas heurísticas com baralho espelhado, não prova de força contra humanos ou no meta.',
             'policy_a':policy_a,'policy_b':policy_b,'seed':seed,
             'mode':'self_play' if self_play else 'head_to_head',

@@ -9,7 +9,7 @@ from collections import Counter
 from copy import deepcopy
 from typing import Any
 
-GENERATOR_VERSION = '0.9.13'
+GENERATOR_VERSION = '0.9.14'
 
 
 def _valid_deck(cards: dict[str, int], names: dict[str, str], favourite_id: str) -> bool:
@@ -144,7 +144,7 @@ def generate_favorite_candidates(favourite_id: str, core: list[dict],
             base_count=sum(raw['cards'].values())
             if base_count!=20:
                 continue
-            deck={'format':'tcgp-lab-v0.9.13','name':f'{favourite["name"]} · hipótese {len(result)+1}',
+            deck={'format':'tcgp-lab-v0.9.14','name':f'{favourite["name"]} · hipótese {len(result)+1}',
                   'energy_types':list(raw.get('energy_types',[])), 'cards':counts,
                   'generated_from':slug, 'favorite_card_id':favourite_id,
                   'candidate_status':'experimental_unverified'}

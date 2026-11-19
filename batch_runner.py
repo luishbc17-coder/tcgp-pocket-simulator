@@ -14,7 +14,7 @@ from battle_audit import AuditedBattle, StateInvariantError, snapshot
 from deck_identity import describe_compiled, compare_decks
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgentV097
-from planning_agent import PlanningAgentV0913
+from planning_agent import PlanningAgentV0914
 from battle_metrics import count_logged_actions, merge_telemetry, new_telemetry, serialize_telemetry, duration_distribution
 
 MAX_BATCH_GAMES = 1_000
@@ -27,15 +27,15 @@ def verify_engine_compatibility() -> None:
     AuditedBattle.__init__ when force_first was passed. Do not silently use
     the old engine: a different implementation invalidates the batch audit.
     """
-    expected_api = 2
+    expected_api = 3
     version = getattr(battle_engine, 'ENGINE_API_VERSION', None)
     parameters = inspect.signature(Battle.__init__).parameters
     if version != expected_api or 'force_first' not in parameters:
         raise RuleError(
-            'Versões incompatíveis do motor de partidas: o lote v0.8.3.1 '
-            'requer battle_engine.py e battle_audit.py da mesma atualização. '
-            'Substitua os quatro arquivos do hotfix no GitHub e reinicie o '
-            'Streamlit em Manage app → Reboot app.'
+            'Versões incompatíveis — publicação incompleta da v0.9.14: battle_engine.py, batch_runner.py e '
+            'os demais arquivos Python devem ser atualizados juntos. '
+            'Extraia o patch e envie todos os arquivos .py na raiz do GitHub; '
+            'depois use Manage app → Reboot app.'
         )
 
 
@@ -80,7 +80,7 @@ def run_technical_batch(left: list[Card], right: list[Card],
     total_actions = 0
     total_turns = 0
     replay = None
-    agent_type = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0913}[agent_mode]
+    agent_type = {'baseline':RuleAgent,'tactical':TacticalAgent,'strategic':StrategicAgentV097,'planning':PlanningAgentV0914}[agent_mode]
     telemetry = new_telemetry()
     start_time = monotonic()
     for idx in range(games):
@@ -196,7 +196,7 @@ def compare_policies(left: list[Card], right: list[Card],
     baseline = run_technical_batch(left, right, agent_mode='baseline', **opts)
     tactical = run_technical_batch(left, right, agent_mode='tactical', **opts)
     return {
-        'kind': 'technical_policy_comparison', 'version': '0.9.13',
+        'kind': 'technical_policy_comparison', 'version': '0.9.14',
         'validated_competitive': False,
         'disclaimer': ('Comparação de comportamento, não medição causal de força: '
                        'as jogadas alteram a trajetória aleatória subsequente.'),

@@ -133,7 +133,7 @@ def run_meta_gauntlet(player_payload: dict, opponents: dict[str, dict],
             progress(rounds_done, total)
     completed = sum(row['completed'] for row in result)
     return {
-        'kind': 'technical_meta_gauntlet', 'version': '0.9.13',
+        'kind': 'technical_meta_gauntlet', 'version': '0.9.14',
         'limitless_reference': evaluate_reference_coverage(result),
         'validated_competitive': False,
         'disclaimer': ('Dados técnicos de políticas heurísticas e efeitos parciais, '

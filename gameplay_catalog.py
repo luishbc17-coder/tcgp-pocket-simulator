@@ -105,6 +105,15 @@ def _is_one_of(source, *references):
 # Explicit reference transcriptions of the PocketDecks v5 English game text.
 # Multiple entries are accepted only where the wording is mechanically identical.
 TRAINER_EFFECTS = {
+    'Misty': ('misty', (
+        'Choose 1 of your [ W ] Pokémon, and flip a coin until you get tails. For each heads, take a [ W ] Energy from your Energy Zone and attach it to that Pokémon.',
+    )),
+    'Pokémon Communication': ('pokemon_communication', (
+        'Choose a Pokémon in your hand and switch it with a random Pokémon in your deck.',
+    )),
+    'Eevee Bag': ('eevee_bag', (
+        "Choose 1: ① During this turn, attacks used by your Pokémon that evolve from Eevee do +10 damage to your opponent's Active Pokémon. ② Heal 20 damage from each of your Pokémon that evolves from Eevee.",
+    )),
     "Serena's Choice": ('serenas_choice', (
         'Look at the top 3 cards of your deck and put 1 of them into your hand. Shuffle back into your deck.',
     )),
@@ -196,6 +205,13 @@ def _recognize_attack(r: dict, raw_attack: dict):
     if name is None:
         return None
     cost = parse_cost(raw_attack.get('cost'))
+    if (r['name'] == 'Eevee' and name == 'Collect' and cost == ('colorless',)
+            and damage in (None, 0) and _same_text(effect, 'Draw a card.')):
+        return Attack(name, cost, 0, 'draw_1')
+    if (r['name'] == 'Manaphy' and name == 'Oceanic Gift' and cost == ('water',)
+            and damage in (None, 0) and _same_text(effect,
+            'Choose 2 of your Benched Pokémon. For each of those Pokémon, take a [W] Energy from your Energy Zone and attach it to that Pokémon.')):
+        return Attack(name, cost, 0, 'zone_water_to_two_bench')
     if (r['name'] == 'Swablu' and name == 'Sing' and cost == ('colorless',)
             and damage in (None, 0) and _same_text(effect, "Your opponent's Active Pokémon is now Asleep.")):
         return Attack(name, cost, 0, 'sleep_active')
@@ -279,6 +295,17 @@ def _recognize_ability(r: dict) -> str:
         return ''
     name = data.get('name')
     effect = data.get('effect')
+    if (r['name'] == 'Glaceon ex' and name == 'Snowy Terrain'
+            and _same_text(effect,
+            "During Pokémon Checkup, if this Pokémon is in the Active Spot, do 10 damage to your opponent's Active Pokémon.")):
+        return 'snowy_terrain'
+    if (r['name'] == 'Vaporeon' and name == 'Wash Out'
+            and _same_text(effect,
+            'As often as you like during your turn, you may move a [W] Energy from 1 of your Benched [W] Pokémon to your Active [W] Pokémon.')):
+        return 'wash_out'
+    if (r['name'] == 'Furfrou' and name == 'Fur Coat'
+            and _same_text(effect, 'This Pokémon takes −20 damage from attacks.')):
+        return 'fur_coat'
     if (name == 'Legendary Pulse' and r['name'] in ('Entei ex', 'Suicune ex', 'Raikou ex')
         and _same_text(effect, 'At the end of your turn, if this Pokémon is in the Active Spot, draw a card.')):
         return 'legendary_pulse'

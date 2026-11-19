@@ -203,7 +203,7 @@ def run_meta_matrix(presets: dict[str, dict], core: list[dict],
             progress(completed_before, total)
     summary = summarize_matrix(plan, results)
     return {
-        'kind':'technical_meta_matrix', 'version':'0.9.13',
+        'kind':'technical_meta_matrix', 'version':'0.9.14',
         'validated_competitive':False,
         'disclaimer':('Resultados de IA heurística em motor parcial, com mesmo peso por adversário; '
                       'não são probabilidades reais do metagame nem ranking oficial.'),

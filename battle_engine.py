@@ -12,7 +12,7 @@ ENERGY_CODES = {'G': 'grass', 'R': 'fire', 'W': 'water', 'L': 'lightning',
                 'P': 'psychic', 'F': 'fighting', 'D': 'darkness',
                 'M': 'metal', 'C': 'colorless'}
 MAX_TURNS = 30
-ENGINE_API_VERSION = 2  # v0.8.3.1 batch/audit protocol: supports forced first player
+ENGINE_API_VERSION = 3  # v0.9.14: Water effect handlers, Checkup and trainer API
 
 class RuleError(ValueError):
     pass
@@ -92,6 +92,7 @@ class Player:
     stadium_used: bool = False
     stadium_action_used: bool = False
     energy_discard: Counter = field(default_factory=Counter)
+    eevee_attack_bonus: int = 0  # Eevee Bag; reset at owner's next turn
 
     def all_in_play(self) -> list[InPlay]:
         return ([self.active] if self.active else []) + self.bench
@@ -174,6 +175,7 @@ class Battle:
         p.retreat_discount = 0
         p.stadium_used = False
         p.stadium_action_used = False
+        p.eevee_attack_bonus = 0
         self._in_turn = True
         # In Pocket the first player does not draw on the opening turn.
         if not (self.turn == 0 and self.current == self.first):
@@ -297,7 +299,9 @@ class Battle:
             return 0
         if (pokemon.tool and pokemon.tool.effect == 'eviolite'
                 and pokemon.card.stage == 0):
-            return max(0, amount - 20)
+            amount = max(0, amount - 20)
+        if pokemon.card.ability == 'fur_coat' and attacker_card is not None:
+            amount = max(0, amount - 20)
         return amount
 
     def _damage_target(self, victim: int, pokemon: InPlay | None, amount: int,
@@ -337,10 +341,21 @@ class Battle:
         i = self.current
         self._require_action(i)
         own, other = self.players[i], self.players[1-i]
-        if pokemon not in own.all_in_play() or pokemon.ability_used_turn == self.turn:
-            raise RuleError('Ability is unavailable or already used this turn')
+        if pokemon not in own.all_in_play():
+            raise RuleError('Ability user is not in play')
         effect = pokemon.card.ability
-        if effect == 'water_shuriken':
+        if effect != 'wash_out' and pokemon.ability_used_turn == self.turn:
+            raise RuleError('Ability already used this turn')
+        if effect == 'wash_out':
+            # The printed ability is repeatable, not once per turn. The target
+            # is the own Benched Water Pokémon donating ONE Water Energy.
+            if (not own.active or own.active.card.element != 'water' or target not in own.bench
+                    or target.card.element != 'water' or 'water' not in target.energy):
+                raise RuleError('Wash Out needs Benched Water donor and Active Water recipient')
+            target.energy.remove('water')
+            own.active.energy.append('water')  # transfer, NOT an attachment from Energy Zone
+            self.log.append(f'P{i} Wash Out: Water Energy {target.card.name} -> {own.active.card.name}')
+        elif effect == 'water_shuriken':
             if target is None:
                 target = other.active
             if target not in other.all_in_play():
@@ -408,7 +423,8 @@ class Battle:
         p.stadium_action_used = True
         self.log.append(f'P{i} Rainbow Cave re-generates {p.energy_types[0]} (mono-type Energy Zone)')
 
-    def play_trainer(self, card: Card, target: InPlay | None = None):
+    def play_trainer(self, card: Card, target: InPlay | None = None,
+                     selected_card: Card | None = None, option: str | None = None):
         i = self.current
         self._require_action(i)
         p, opp = self.players[i], self.players[1-i]
@@ -418,7 +434,62 @@ class Battle:
             raise RuleError('Item cards locked by Jingly Noise')
         if p.supporter_used and card.kind == 'supporter':
             raise RuleError('Supporter already used')
-        if card.effect == 'research':
+        if card.effect == 'misty':
+            if p.energy_types != ('water',):
+                raise RuleError('Misty requires Water Energy in Energy Zone')
+            if target is None:
+                target = p.active if p.active and p.active.card.element == 'water' else next(
+                    (x for x in p.bench if x.card.element == 'water'), None)
+            if target not in p.all_in_play() or target.card.element != 'water':
+                raise RuleError('Misty target must be an own Water Pokémon')
+            p.hand.remove(card)
+            heads = 0
+            # Extremely unlikely pathological all-heads streams fail visibly;
+            # never silently invent a tails outcome.
+            for _ in range(1024):
+                if not self.rng.choice((True, False)):
+                    break
+                heads += 1
+                self._zone_attach(i,target,'water','Misty')
+                if self.finished:
+                    break
+            else:
+                raise RuleError('Misty coin sequence exceeded safety limit')
+            self.log.append(f'P{i} Misty: {heads} heads before tails')
+        elif card.effect == 'pokemon_communication':
+            choices = [c for c in p.hand if c is not card and c.kind == 'pokemon']
+            available = [c for c in p.deck if c.kind == 'pokemon']
+            if not choices or not available:
+                raise RuleError('Pokémon Communication needs hand and deck Pokémon')
+            chosen = selected_card if selected_card is not None else min(
+                choices,key=lambda c:(c.stage,c.hp,c.name))
+            if chosen not in choices:
+                raise RuleError('Pokémon Communication requires own hand Pokémon')
+            incoming = self.rng.choice(available)  # before returning chosen card
+            p.deck.remove(incoming)
+            p.hand.remove(chosen)
+            p.hand.remove(card)
+            p.hand.append(incoming)
+            p.deck.append(chosen)
+            self.rng.shuffle(p.deck)
+            self.log.append(f'P{i} Pokémon Communication: {chosen.name} -> {incoming.name}')
+        elif card.effect == 'eevee_bag':
+            line = [mon for mon in p.all_in_play() if mon.card.evolves_from.casefold() == 'eevee']
+            if not line:
+                raise RuleError('Eevee Bag needs a Pokémon evolved from Eevee')
+            if option is None:
+                option = 'heal' if any(mon.damage>=20 for mon in line) else 'boost'
+            if option not in ('heal','boost'):
+                raise RuleError('Eevee Bag option must be heal or boost')
+            p.hand.remove(card)
+            if option=='heal':
+                amount=sum(min(20,mon.damage) for mon in line)
+                for mon in line: mon.damage=max(0,mon.damage-20)
+                self.log.append(f'P{i} Eevee Bag heals {amount} across Eevee evolutions')
+            else:
+                p.eevee_attack_bonus += 10
+                self.log.append(f'P{i} Eevee Bag: cumulative +{p.eevee_attack_bonus} Active attack damage by Eevee evolutions this turn')
+        elif card.effect == 'research':
             p.hand.remove(card)
             self.draw(i, 2)
         elif card.effect == 'pokeball':
@@ -689,7 +760,8 @@ class Battle:
         required = Counter(x for x in attack.cost if x != 'colorless')
         return all(owned[t] >= n for t, n in required.items())
 
-    def attack(self, selected: Attack, target: InPlay | None = None):
+    def attack(self, selected: Attack, target: InPlay | None = None,
+               bench_targets: tuple[InPlay,...] | None = None):
         i = self.current
         self._require_action(i)
         me, them = self.players[i], self.players[1-i]
@@ -711,7 +783,8 @@ class Battle:
                  'discard_opponent_supporter', 'item_lock_next_turn', 'sleep_active',
                  'both_benches_plus_20', 'fire_extra_2_plus_60', 'recoil_50',
                  'water_snipe_130_discard','mirror_shot',
-                 'lightning_each_plus_20','basic_plus_50','discard_all_self_energy')
+                 'lightning_each_plus_20','basic_plus_50','discard_all_self_energy',
+                 'draw_1','zone_water_to_two_bench')
         if selected.effect not in valid:
             raise UnsupportedEffect('Attack effect requires handler')
         if selected.effect == 'water_snipe_130_discard':
@@ -732,6 +805,27 @@ class Battle:
             return
         if target is not None:
             raise RuleError('Explicit attack targets are only supported by Diving Icicles')
+        if bench_targets is not None and selected.effect != 'zone_water_to_two_bench':
+            raise RuleError('Bench targets only supported for Oceanic Gift')
+        if selected.effect == 'zone_water_to_two_bench':
+            if me.energy_types != ('water',):
+                raise RuleError('Oceanic Gift needs Water Energy Zone')
+            eligible = me.bench
+            if bench_targets is None:
+                recipients = sorted(eligible, key=lambda mon:(len(mon.energy),-mon.max_hp))[:2]
+            else:
+                recipients = list(bench_targets)
+                if len(recipients) != min(2,len(eligible)) or any(
+                        mon not in eligible for mon in recipients) or len({id(mon) for mon in recipients}) != len(recipients):
+                    raise RuleError('Oceanic Gift needs distinct own Benched Pokémon')
+            for mon in recipients:
+                self._zone_attach(i,mon,'water','Oceanic Gift')
+                if self.finished: break
+            self.log.append(f'P{i} {me.active.card.name} uses Oceanic Gift, 0 damage to P{1-i} Active {them.active.card.name}')
+            self.log.append(f'P{i} Manaphy Oceanic Gift gives {len(recipients)} Water Energy')
+            self._resolve_attack_knockouts()
+            self.end_turn()
+            return
         damage = selected.damage
         if selected.effect == 'coin_bonus_30':
             heads = self.rng.choice((True, False))
@@ -746,6 +840,9 @@ class Battle:
             damage += 20 * me.active.energy.count('lightning')
         if selected.effect == 'basic_plus_50' and them.active.card.stage == 0:
             damage += 50
+        if (me.eevee_attack_bonus and me.active.card.evolves_from.casefold() == 'eevee'
+                and damage >= 0):
+            damage += me.eevee_attack_bonus
         if (self.stadium and self.stadium.effect == 'training_area'
                 and me.active.card.stage == 1 and damage > 0):
             damage += 10
@@ -770,6 +867,10 @@ class Battle:
                 chosen = supporters[0]  # deterministic baseline choice, not optimal
                 them.hand.remove(chosen)
                 self.log.append(f'Mega Absol ex discards opposing Supporter: {chosen.name}')
+        if selected.effect == 'draw_1':
+            before = len(me.hand)
+            self.draw(i,1)
+            self.log.append(f'P{i} {me.active.card.name} Collect draws {len(me.hand)-before} card')
         if selected.effect == 'heal_self_30':
             old = me.active.damage
             me.active.damage = max(0, me.active.damage - 30)
@@ -805,7 +906,7 @@ class Battle:
         self._resolve_attack_knockouts()
         self.end_turn()
 
-    def _resolve_attack_knockouts(self):
+    def _resolve_attack_knockouts(self, from_attack: bool = True):
         """Score all KOs from the current attack as one resolution group.
 
         Winners are determined by *number of satisfied conditions* (3+ points,
@@ -828,7 +929,7 @@ class Battle:
                     owner.bench.remove(pokemon)
                     spot = 'Bench'
                 owner.energy_discard.update(pokemon.energy)
-                if pokemon.tool and pokemon.tool.effect == 'lucky_egg' and victim != self.current:
+                if (from_attack and pokemon.tool and pokemon.tool.effect == 'lucky_egg' and victim != self.current):
                     self.draw(victim, max(0, 5-len(owner.hand)))
                     self.log.append(f'P{victim} Lucky Egg draws to {len(owner.hand)} cards')
                 self.players[scorer].points += pokemon.card.points
@@ -900,6 +1001,20 @@ class Battle:
                             and foe_active and foe_active.status == 'asleep'):
                         self._damage_target(1-owner_idx, foe_active, 20, owner_idx,
                                             source='Darkrai — Bad Dreams')
+        # Pokémon Checkup takes place between both players' turns. Snapshot
+        # both Glaceon effects before applying damage; resolve simultaneous
+        # Checkup KOs together, never as attack damage (no Eviolite/Fur Coat).
+        if not self.finished:
+            snowy = [idx for idx,owner in enumerate(self.players)
+                     if owner.active and owner.active.card.ability == 'snowy_terrain']
+            for owner_idx in snowy:
+                victim = self.players[1-owner_idx].active
+                if victim is not None:
+                    victim.damage += 10
+                    self.log.append(f'Pokémon Checkup: P{owner_idx} Snowy Terrain -> P{1-owner_idx} Active +10')
+            if snowy and any(mon is not None and mon.damage >= mon.max_hp
+                             for owner in self.players for mon in [owner.active]):
+                self._resolve_attack_knockouts(from_attack=False)
         # Mirror Shot's restriction ends with the defending player's turn.
         for mon in self.players[self.current].all_in_play():
             mon.mirror_shot_pending = False
@@ -962,6 +1077,10 @@ class RuleAgent:
             score += 15  # extra damage to Bench, no weakness
         if attack.effect == 'heal_self_30':
             score += 0.75 * min(attacker.damage, 30)
+        if attack.effect == 'draw_1':
+            score += 25
+        if attack.effect == 'zone_water_to_two_bench':
+            score += 30 * min(2,len(bench))
         if attack.effect == 'sleep_active':
             score += 12
         if attack.effect == 'item_lock_next_turn':
@@ -1058,6 +1177,19 @@ class RuleAgent:
             if (c.effect == 'flame_patch' and not p.item_locked and p.active
                     and p.active.card.element == 'fire' and p.energy_discard['fire'] > 0):
                 battle.play_trainer(c)
+        # Water-transfer abilities are repeatable; use public bench energy to
+        # bring the Active closer to a legal attack before manual attachment.
+        if p.active and p.active.card.element=='water' and any(
+                mon.card.ability == 'wash_out' for mon in p.all_in_play()):
+            for _ in range(sum(mon.energy.count('water') for mon in p.bench)):
+                candidates = [mon for mon in p.bench if mon.card.element=='water'
+                              and 'water' in mon.energy]
+                if not candidates or any(battle.can_pay_energy(p.active,atk)
+                                          for atk in p.active.card.attacks):
+                    break
+                donor=max(candidates,key=lambda m:(m.energy.count('water'),len(m.energy)))
+                source=next(mon for mon in p.all_in_play() if mon.card.ability=='wash_out')
+                battle.use_ability(source,donor)
         # Activated abilities: energy acceleration and Water Shuriken.
         for pokemon in list(p.all_in_play()):
             if pokemon.ability_used_turn == battle.turn:
@@ -1079,6 +1211,24 @@ class RuleAgent:
             elif (pokemon.card.ability == 'roar_in_unison' and p.energy_types == ('darkness',)
                   and pokemon.damage + 30 < pokemon.max_hp):
                 battle.use_ability(pokemon)
+        # New source-aligned Trainers: exchange a redundant Pokémon, power a
+        # Water attacker with Misty, and reserve Eevee Bag until attack phase.
+        if not p.item_locked:
+            for c in list(p.hand):
+                if (c.effect=='pokemon_communication' and
+                        any(x.kind=='pokemon' for x in p.hand if x is not c) and
+                        any(x.kind=='pokemon' for x in p.deck)):
+                    battle.play_trainer(c)
+                    break
+        if not p.supporter_used and p.energy_types==('water',):
+            misty=next((c for c in p.hand if c.effect=='misty'),None)
+            if misty:
+                water=[x for x in p.all_in_play() if x.card.element=='water']
+                if water:
+                    target=max(water,key=lambda mon:(mon is p.active,
+                        max((a.damage for a in mon.card.attacks),default=0)-15*len(mon.energy)))
+                    if not any(battle.can_pay_energy(target,a) for a in target.card.attacks):
+                        battle.play_trainer(misty,target)
         # Supporters with specific eligibility: only spend them when useful.
         # Wally accelerates Stage 2 Pokémon with genuine Colorless Energy.
         if not p.supporter_used:
@@ -1153,6 +1303,16 @@ class RuleAgent:
                 if battle.finished:
                     battle.end_turn()
                     return
+        if not p.item_locked:
+            for c in list(p.hand):
+                if c.effect=='eevee_bag':
+                    evolved=[mon for mon in p.all_in_play() if mon.card.evolves_from.casefold()=='eevee']
+                    injured=sum(min(20,mon.damage) for mon in evolved)
+                    if injured >= 20:
+                        battle.play_trainer(c,option='heal')
+                    elif (p.active in evolved and not p.eevee_attack_bonus and
+                          any(battle.can_pay_energy(p.active,a) for a in p.active.card.attacks)):
+                        battle.play_trainer(c,option='boost')
         if p.active:
             options = [a for a in p.active.card.attacks if battle.can_pay_energy(p.active,a)]
             if options and p.active.status != 'asleep':
