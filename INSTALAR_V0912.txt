@@ -1,0 +1,14 @@
+TCG Pocket Lab 0.9.12
+1. Faça backup da pasta anterior.
+2. Extraia o ZIP completo ou sobreponha os arquivos do ZIP incremental sobre a v0.9.11.
+3. Instale dependências conforme o README anterior e execute streamlit run web_app.py.
+4. Em Matriz > Laboratório de decisões, escolha planning (v0.9.12) e planning_v0911/v099.
+5. Os cinco novos decks são apenas catálogo até suas cartas serem homologadas.
+
+VALIDAÇÃO TÉCNICA
+  PYTHONPATH=. python -m pytest -q --disable-warnings
+  Resultado desta entrega: 298 testes + 9 subtestes aprovados.
+
+CUIDADO
+  Holdout anterior já foi analisado repetidamente; para uma nova avaliação reserve nova semente conforme PLANO_TESTES_V0912.md.
+  A versão não garante melhora de taxa de vitória nem implementação de regras novas.
