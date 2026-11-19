@@ -1,4 +1,4 @@
-"""TCG Pocket Lab v0.9.12: bounded sequence planning, preserved baselines, 46 sourced presets."""
+"""TCG Pocket Lab v0.9.13: bounded sequence planning, preserved baselines, 51 sourced presets."""
 import json
 from collections import defaultdict
 import streamlit as st
@@ -8,9 +8,12 @@ from deckbuilder import make_experiment
 from layout_helpers import paginate, PAGE_SIZE
 from gameplay_catalog import GAMEPLAY_URL, audit_core_cards, audit_gameplay_records, compile_deck, evolution_line_map
 from engine_diagnostics import run_smoke_checks
-from matchup_compatibility import parse_payload, inspect_matchup, load_compiled_deck
+from matchup_compatibility import parse_payload, inspect_matchup, inspect_deck, load_compiled_deck
 from battle_engine import play_fixture_match, RuleError, UnsupportedEffect
 from meta_decks import DECKS, get_preset, verify_presets
+from offmeta_builder import generate_favorite_candidates
+from offmeta_benchmark import evaluate_candidate_field
+from limitless_meta import default_snapshot, validate_snapshot, evaluate_reference_coverage, REFERENCE_URL
 from card_support import build_support_index, coverage_summary
 from meta_gauntlet import build_gauntlet_plan, run_meta_gauntlet, MAX_GAMES_PER_OPPONENT
 from meta_matrix import build_matrix_plan, run_meta_matrix, MAX_GAMES_PER_PAIR, MAX_TOTAL_MATRIX_GAMES
@@ -20,7 +23,7 @@ from deck_transfer import stage_transfer, apply_pending_transfer
 from batch_runner import run_technical_batch, compare_policies, MAX_BATCH_GAMES, verify_engine_compatibility
 from tactical_agent import TacticalAgent
 from strategic_agent import StrategicAgentV097
-from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911
+from planning_agent import PlanningAgentV098, PlanningAgentV099, PlanningAgentV0910, PlanningAgentV0911, PlanningAgentV0913
 from policy_duel import duel_policies
 from deck_identity import describe_selection, compare_decks
 from visual_theme import (CSS, VERSION, hero, section, is_pokemon, card_caption,
@@ -116,7 +119,7 @@ if _notice:
     st.success(f'Deck «{_notice}» carregado com sucesso. Continue na Arena ou abra Meu deck para editar.')
 # Real, stateful navigation: unlike st.tabs, it does not rely on the frontend
 # keeping an active tab after a rerun or a staged deck import.
-NAV_ITEMS = ('🔎 Cartas', '🧩 Meu deck', '⚔️ Meta', '🏆 Matriz', '⚙️ Motor', 'ℹ️ Sobre')
+NAV_ITEMS = ('🔎 Cartas', '🧩 Meu deck', '⚔️ Meta', '🧪 Off-meta', '🏆 Matriz', '⚙️ Motor', 'ℹ️ Sobre')
 with st.container(key='lab_navigation_v0933'):
     current_view = st.radio('Navegação principal', NAV_ITEMS, horizontal=True,
                             label_visibility='collapsed', key='main_view_v0933')
@@ -327,7 +330,7 @@ if current_view == '🏆 Matriz':
         options=[20,40,100], value=20, key='matrix_games_v094')
     matrix_policy = st.selectbox('Política usada pelos dois jogadores',
         ['strategic','planning','tactical','baseline'],
-        format_func=lambda mode: {'planning':'Planejadora v0.9.12 (experimental)', 'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
+        format_func=lambda mode: {'planning':'Planejadora v0.9.13 (experimental)', 'strategic':'Estratégica v0.9.7', 'tactical':'Tática v0.9', 'baseline':'Clássica v0.8.4'}[mode],
         key='matrix_policy_v094')
     matrix_seed = st.number_input('Semente da matriz', min_value=0, max_value=2_000_000_000,
         step=1, value=20261116, key='matrix_seed_v094')
@@ -572,8 +575,8 @@ if current_view == '🏆 Matriz':
 
 
     # Direct, mirror-deck policy duel isolates AI choices from deck strength.
-    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.12', expanded=False):
-        st.caption('🆕 IA Planejadora v0.9.12: busca limitada de sequências (energia, recuo e ataque), evolução/habilidades ordenadas e custo de sobrevivência. Compare com as referências históricas; experimental.')
+    with st.expander('🧠 Laboratório de decisões · IA contra IA · v0.9.13', expanded=False):
+        st.caption('🆕 IA Planejadora v0.9.13: self-play e proteção de recuos; busca limitada de sequências (energia, recuo e ataque), evolução/habilidades ordenadas e custo de sobrevivência. Compare com as referências históricas; experimental.')
         st.caption('Duas IAs jogam entre si usando a MESMA lista, com posições e ordem '
                    'de início equilibradas. Isso é mais útil para comparar políticas '
                    'do que modificar a IA dos dois lados simultaneamente.')
@@ -582,17 +585,17 @@ if current_view == '🏆 Matriz':
             key='direct_duel_deck_v098')
         duel_col1, duel_col2 = st.columns(2)
         with duel_col1:
-            ai_a = st.selectbox('IA A', ['planning','planning_v0911','planning_v099','planning_v0910','strategic','planning_v098','strategic_v096','tactical','baseline'],
-                 format_func=lambda m:{'planning':'Planejadora 0.9.12','planning_v0911':'Planejadora anterior 0.9.11','planning_v099':'Planejadora anterior 0.9.9','planning_v0910':'Planejadora anterior 0.9.10','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
+            ai_a = st.selectbox('IA A', ['planning','planning_v09121','planning_v0912','planning_v0911','planning_v099','planning_v0910','strategic','planning_v098','strategic_v096','tactical','baseline'],
+                 format_func=lambda m:{'planning':'Planejadora 0.9.13','planning_v09121':'Planejadora 0.9.12.1','planning_v0912':'Planejadora anterior 0.9.12','planning_v0911':'Planejadora anterior 0.9.11','planning_v099':'Planejadora anterior 0.9.9','planning_v0910':'Planejadora anterior 0.9.10','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
                  key='direct_duel_a_v098')
         with duel_col2:
-            ai_b = st.selectbox('IA B', ['planning_v0911','planning_v099','planning_v0910','strategic','planning_v098','strategic_v096','tactical','baseline','planning'],
-                 format_func=lambda m:{'planning':'Planejadora 0.9.12','planning_v0911':'Planejadora anterior 0.9.11','planning_v099':'Planejadora anterior 0.9.9','planning_v0910':'Planejadora anterior 0.9.10','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
+            ai_b = st.selectbox('IA B', ['planning_v09121','planning_v0911','planning_v0912','planning_v099','planning_v0910','strategic','planning_v098','strategic_v096','tactical','baseline','planning'],
+                 format_func=lambda m:{'planning':'Planejadora 0.9.13','planning_v09121':'Planejadora 0.9.12.1','planning_v0912':'Planejadora anterior 0.9.12','planning_v0911':'Planejadora anterior 0.9.11','planning_v099':'Planejadora anterior 0.9.9','planning_v0910':'Planejadora anterior 0.9.10','planning_v098':'Planejadora anterior 0.9.8','strategic':'Estratégica 0.9.7','strategic_v096':'Estratégica 0.9.6','tactical':'Tática','baseline':'Clássica'}[m],
                  key='direct_duel_b_v098')
         duel_games = st.select_slider('Partidas do confronto entre IAs',
             options=[20,100,200,400],value=100,key='direct_duel_n_v098')
         duel_seed = st.number_input('Semente para comparação direta', min_value=0,
-            max_value=2_000_000_000, value=20261116, step=1,
+            max_value=2_000_000_000, value=77531041, step=1,
             key='direct_duel_seed_v098')
         benchmark_split = st.radio('Conjunto de sementes', ['development', 'holdout'],
             format_func=lambda v:'Desenvolvimento (ajuste)' if v=='development' else
@@ -604,17 +607,16 @@ if current_view == '🏆 Matriz':
         duel_preset = get_preset(duel_slug)
         duel_block = duel_preset.get('simulation_blocked_reason','')
         if ai_a == ai_b:
-            st.warning('Escolha duas IAs diferentes.')
+            st.info('🪞 Self-play ativado: uma IA enfrenta uma cópia idêntica. A taxa de vitória entre clones NÃO indica força; avalie equilíbrio entre primeiro/segundo, recuos, evolução e ataques.')
         if duel_block:
             st.warning(f'Deck ainda não auditado: {duel_block}')
-        can_duel = ai_a != ai_b and not duel_block
-        if st.button('⚔️ Testar as duas IAs com o mesmo deck',
+        can_duel = not duel_block
+        if st.button('🪞 Executar self-play' if ai_a==ai_b else '⚔️ Comparar políticas',
                      key='run_direct_duel_v098',use_container_width=True,
                      disabled=not can_duel):
             progress_duel = st.progress(0,text='Preparando confronto entre IAs…')
             try:
                 game_cards_duel = matrix_data if matrix_data is not None else fetch_gameplay_catalog()
-                from matchup_compatibility import inspect_deck
                 diagnosis_duel=inspect_deck(duel_preset,cards,game_cards_duel)
                 if not diagnosis_duel['technical_demo_ready']:
                     raise ValueError('Deck incompatível. Revise as cartas pendentes no catálogo antes de jogar.')
@@ -645,7 +647,20 @@ if current_view == '🏆 Matriz':
             o=report['outcomes'];ci=report['a_score_interval']
             st.markdown(f'**{ai_a}**: {o["a"]} vitórias · '
                         f'**{ai_b}**: {o["b"]} vitórias · {o["draw"]} empates')
-            if ci:
+            if report.get('self_play_diagnostics'):
+                sp=report['self_play_diagnostics']
+                st.markdown('**Diagnóstico de self-play (clones idênticos)**')
+                st.caption(f'Quem começou venceu {sp["first_player_wins"]} partidas; quem começou em segundo, {sp["second_player_wins"]}. '
+                           'Compare ritmo e ações; a vitória de A ou B não representa melhoria da política.')
+                if sp['first_player_score_interval']:
+                    sc=sp['first_player_score_interval']
+                    st.caption(f'Pontuação de quem começou: {sc["score_pct"]:.1f}% (IC 95%: '
+                               f'{sc["lower_pct"]:.1f}–{sc["upper_pct"]:.1f}%).')
+                if sp.get('starting_position_signal')=='second_player_advantage_in_this_sample':
+                    st.warning('Neste conjunto houve vantagem para quem começou em segundo. Investigue o efeito das regras, da política e das sementes antes de generalizar.')
+                elif sp.get('starting_position_signal')=='first_player_advantage_in_this_sample':
+                    st.warning('Neste conjunto houve vantagem para quem começou primeiro. Investigue com novos decks e sementes antes de generalizar.')
+            if ci and not report.get('self_play_diagnostics'):
                 st.caption(f'Pontuação da IA A: {ci["score_pct"]:.1f}% '
                            f'(IC aproximado de 95%: {ci["lower_pct"]:.1f}–{ci["upper_pct"]:.1f}%). '
                            'Não é uma taxa de vitória contra jogadores humanos.')
@@ -741,9 +756,194 @@ if current_view == '🏆 Matriz':
                 st.error('Algumas partidas falharam; não interprete as vitórias como resultado completo.')
             st.download_button('⬇️ Baixar benchmark de IA',
                 data=json.dumps(report,ensure_ascii=False,indent=2),
-                file_name='duelo_ias_v099.json',mime='application/json',
+                file_name='duelo_ias_v0913.json',mime='application/json',
                 key='download_direct_duel_v098',use_container_width=True)
 
+
+
+if current_view == '🧪 Off-meta':
+    st.markdown(section('Laboratório off-meta',
+        'Escolha sua carta favorita, crie hipóteses de decks e teste somente as listas compatíveis.',
+        'PESQUISA · V0.9.13'), unsafe_allow_html=True)
+    st.info('A IA ainda NÃO aprende nem inventa regras: esta etapa gera hipóteses a partir de '
+            'listas existentes. Só recomenda desempenho após partidas realmente executadas.')
+
+    # External data is a dated snapshot, not inferred from current local games.
+    if 'limitless_snapshot_v0913' not in st.session_state:
+        st.session_state['limitless_snapshot_v0913'] = default_snapshot()
+    with st.expander('📊 Referência externa — Play Limitless', expanded=True):
+        st.caption('Fonte: Play Limitless, Pokémon TCG Pocket. Retrato consultado em 19/11/2026; '
+                   'não é atualização automática. A participação e o win rate da tabela pertencem '
+                   'aos torneios, NÃO são resultados do nosso simulador.')
+        st.link_button('Abrir dados do Limitless', REFERENCE_URL)
+        snapshot_file = st.file_uploader('Importar snapshot JSON validado (opcional)',type=['json'],
+                                         key='limitless_import_v0913')
+        if snapshot_file is not None and st.button('Validar e aplicar snapshot',key='limitless_apply_v0913'):
+            try:
+                incoming=json.loads(snapshot_file.getvalue().decode('utf-8'))
+                st.session_state['limitless_snapshot_v0913']=validate_snapshot(incoming)
+                st.success('Snapshot validado; participações externas atualizadas nesta sessão.')
+            except (UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                st.error(f'Não foi possível importar o snapshot: {exc}')
+        snapshot=st.session_state['limitless_snapshot_v0913']
+        st.caption(f"Último retrato: {snapshot.get('observed_on','sem data')} · "
+                   f"{len(snapshot['archetypes'])} arquétipos nesta amostra. "
+                   'O restante do meta permanece fora da amostra.')
+        st.dataframe([{'Arquétipo':a['name'], 'Participação (%)':a['share_pct'],
+                       'Win rate externo (%)':a.get('observed_win_pct'),
+                       'Decks registrados':a.get('count')}
+                      for a in snapshot['archetypes']],
+                     use_container_width=True,hide_index=True)
+        st.download_button('Baixar snapshot versionado (JSON)',
+                           data=json.dumps(snapshot,ensure_ascii=False,indent=2),
+                           file_name='limitless_pocket_snapshot_v0913.json',mime='application/json',
+                           key='limitless_download_v0913')
+
+    st.markdown('### Começar por uma carta favorita')
+    query_fav=st.text_input('Busque pelo nome do Pokémon ou da carta',
+        placeholder='Ex.: Dragonite, Greninja, Gengar…',key='favorite_query_v0913')
+    matches=([c for c in cards if query_fav.strip().casefold() in c['name'].casefold()]
+             if query_fav.strip() else [])
+    matches=sorted(matches,key=lambda c:(c['name'].casefold(),c['id']))[:100]
+    if query_fav.strip() and not matches:
+        st.warning('Nenhuma carta com esse nome no catálogo carregado.')
+    if matches:
+        candidate_favorite=st.selectbox('Carta / edição específica',
+            [c['id'] for c in matches],
+            format_func=lambda cid:f"{by_id[cid]['name']} · {cid}",
+            key='favorite_card_v0913')
+        st.caption('Geração determinística: variações de listas conhecidas mantendo a carta escolhida. '
+                   'Uma evolução sem linha prévia cadastrada não é completada por suposição.')
+        if st.button('✨ Gerar hipóteses de deck',key='generate_offmeta_v0913',use_container_width=True):
+            st.session_state['offmeta_request_v0913'] = candidate_favorite
+        chosen=st.session_state.get('offmeta_request_v0913')
+        if chosen==candidate_favorite:
+            options=generate_favorite_candidates(chosen,cards,DECKS,
+                        current=payload() if total()==20 else None,max_candidates=5)
+            if not options:
+                st.warning('Não há uma construção segura a partir das listas atuais para esta evolução. '
+                           'É necessário cadastrar/validar sua linha evolutiva antes de propor uma lista completa.')
+            else:
+                st.markdown(f'**{len(options)} hipóteses para {by_id[chosen]["name"]}**')
+                st.caption('A ordem das opções NÃO representa um ranking de força. '
+                           'Listas catalogadas/bloqueadas não recebem percentuais de vitória.')
+                try:
+                    game_catalog=fetch_gameplay_catalog()
+                except (requests.RequestException,ValueError,TypeError) as exc:
+                    game_catalog=None
+                    st.warning(f'Compatibilidade temporariamente indisponível: {exc}')
+                opponent_options=[r['slug'] for r in snapshot['archetypes'] if r['slug'] in DECKS]
+                chosen_rivals=st.multiselect('Adversários do Limitless para testar',
+                    opponent_options, default=[slug for slug in ('hoopa_mega_absol','mega_altaria_greninja')
+                                              if slug in opponent_options],
+                    format_func=lambda slug: DECKS[slug]['name'],key='offmeta_rivals_v0913')
+                games_off=st.select_slider('Partidas por adversário compatível',
+                    options=[20,40,100],value=40,key='offmeta_games_v0913')
+                seed_off=st.number_input('Semente experimental',min_value=0,
+                    max_value=2_000_000_000,value=77531041,step=1,key='offmeta_seed_v0913')
+                if 'offmeta_results_v0913' not in st.session_state:
+                    st.session_state['offmeta_results_v0913']={}
+                if st.button('🧪 Simular todas as hipóteses elegíveis e comparar',
+                             key='offmeta_all_v0913',disabled=not game_catalog or not chosen_rivals,
+                             use_container_width=True):
+                    try:
+                        rivals={slug:get_preset(slug) for slug in chosen_rivals}
+                        comparison=evaluate_candidate_field(options,rivals,cards,game_catalog,
+                            games_per_opponent=int(games_off),seed=int(seed_off),snapshot=snapshot)
+                        st.session_state['offmeta_all_results_v0913']={
+                            'request':[chosen,chosen_rivals,int(games_off),int(seed_off)],
+                            'result':comparison}
+                    except (RuleError,UnsupportedEffect,ValueError,TypeError,KeyError,RuntimeError) as exc:
+                        st.error(f'Não foi possível comparar as hipóteses: {exc}')
+                combined=st.session_state.get('offmeta_all_results_v0913')
+                if combined and combined['request']==[chosen,chosen_rivals,int(games_off),int(seed_off)]:
+                    report_all=combined['result']
+                    st.markdown('**Avaliação conjunta das candidatas**')
+                    st.dataframe([{'Construção':r['name'], 'Ranking técnico':r['rank'],
+                                   'Status':r['status'], 'Partidas':r['completed'],
+                                   'Cobertura do meta (%)':r['covered_meta_share_pct'],
+                                   'Score ponderado (%)':r['technical_weighted_score_pct']}
+                                   for r in report_all['candidates']],
+                                 use_container_width=True,hide_index=True)
+                    st.caption(report_all['warnings'])
+                    if not report_all['ranked']:
+                        st.info('Sem ranking comparável: faltam duas candidatas simuláveis '
+                                'com exatamente os mesmos adversários e número de partidas.')
+                    st.download_button('Baixar comparação completa JSON',
+                        data=json.dumps(report_all,ensure_ascii=False,indent=2),
+                        file_name='offmeta_comparacao_v0913.json',mime='application/json',
+                        key='offmeta_all_download_v0913')
+
+                for candidate in options:
+                    deck=candidate['deck']
+                    with st.expander(candidate['label'],expanded=False):
+                        st.caption(f"Fonte de construção: {candidate['source_name']} · "
+                                   f"{candidate['favorite_copies']} cópia(s) da carta escolhida · "
+                                   f"{candidate['changes_from_source']} substituição(ões) · "
+                                   f"energia: {', '.join(deck['energy_types'])}")
+                        inspection=inspect_deck(deck,cards,game_catalog) if game_catalog else None
+                        blocked=deck.get('simulation_blocked_reason','')
+                        ready=bool(inspection and inspection['technical_demo_ready'] and not blocked)
+                        if ready:
+                            st.success('20/20 cartas reconhecidas. Elegível para duelo técnico (não homologação competitiva).')
+                        else:
+                            reasons=([blocked] if blocked else []) + (
+                                inspection['issues'] if inspection else ['Catálogo de jogabilidade indisponível'])
+                            st.warning('Não simulável nesta versão: '+'; '.join(reasons[:3]))
+                            if inspection:
+                                missing=[f"{c['name']}: {c['reason']}" for c in inspection['cards']
+                                         if c['status']=='bloqueada']
+                                if missing: st.caption('; '.join(missing[:4]))
+                        with st.container():
+                            st.download_button('Baixar deck JSON',
+                                data=json.dumps(deck,ensure_ascii=False,indent=2),
+                                file_name=f"offmeta_{candidate['id']}_v0913.json",mime='application/json',
+                                key=f"offmeta_download_{candidate['id']}")
+                            if st.button('🧩 Carregar para editar',key=f"offmeta_load_{candidate['id']}"):
+                                try:
+                                    load_payload(deck)
+                                    st.success('Deck enviado ao editor. Abra a aba Meu deck para editar.')
+                                    st.rerun()
+                                except (ValueError,KeyError,TypeError) as exc:
+                                    st.error(str(exc))
+                            if st.button('⚔️ Simular esta hipótese',key=f"offmeta_sim_{candidate['id']}",
+                                         disabled=not ready or not chosen_rivals):
+                                rival_field={slug:get_preset(slug) for slug in chosen_rivals}
+                                try:
+                                    report=run_meta_gauntlet(deck,rival_field,cards,game_catalog,
+                                      games_per_opponent=int(games_off),seed=int(seed_off),
+                                      agent_mode='planning')
+                                    report['limitless_reference']=evaluate_reference_coverage(
+                                        report['results'],snapshot)
+                                    st.session_state['offmeta_results_v0913'][candidate['id']]=(
+                                        {'request':[chosen,chosen_rivals,int(games_off),int(seed_off),
+                                                    deck['cards']], 'report':report})
+                                except (RuleError,UnsupportedEffect,ValueError,IndexError,
+                                        KeyError,TypeError,RuntimeError) as exc:
+                                    st.error(f'Erro de simulação: {exc}')
+                            saved=st.session_state['offmeta_results_v0913'].get(candidate['id'])
+                            request=[chosen,chosen_rivals,int(games_off),int(seed_off),deck['cards']]
+                            if saved and saved['request']==request:
+                                report=saved['report']
+                                weighted=report['limitless_reference']
+                                st.metric('Partidas concluídas',report['completed'])
+                                st.metric('Participação do meta coberta por simulações',
+                                          f"{weighted['completed_share_pct']:.2f}%")
+                                if weighted['conditional_score_pct'] is None:
+                                    st.info('Nenhum adversário escolhido possui mecânicas plenamente suportadas. '
+                                            'Não há taxa de vitória a informar.')
+                                else:
+                                    st.metric('Resultado técnico ponderado, SOMENTE cobertura',
+                                              f"{weighted['conditional_score_pct']:.1f}%")
+                                st.caption(weighted['warning'])
+                                st.dataframe([{'Adversário':r['name'],'Status':r['status'],
+                                               'Jogos':r.get('completed',0),'Win rate técnico (%)':r.get('win_rate')}
+                                              for r in report['results']],use_container_width=True,
+                                             hide_index=True)
+                                st.download_button('Baixar relatório de simulações JSON',
+                                    data=json.dumps(report,ensure_ascii=False,indent=2),
+                                    file_name=f"offmeta_resultado_{candidate['id']}_v0913.json",
+                                    mime='application/json',key=f"offmeta_report_{candidate['id']}")
 
 if current_view == '⚔️ Meta':
     st.markdown(section('Arena de confrontos',
@@ -777,7 +977,7 @@ if current_view == '⚔️ Meta':
     policy_label = st.selectbox(
         'Política da IA para este experimento',
         ['Estratégica v0.9.7 — prioriza recursos e sobrevivência',
-         'Planejadora v0.9.12 — planejamento integrado e sobrevivência (experimental)',
+         'Planejadora v0.9.13 — self-play e controle de recuo (experimental)',
          'Tática v0.9 — considera evoluções e melhores trocas',
          'Clássica v0.8.4 — referência anterior'],
         key='policy_choice_v09',
@@ -785,7 +985,7 @@ if current_view == '⚔️ Meta':
     agent_mode = ('planning' if policy_label.startswith('Planejadora') else
                   'strategic' if policy_label.startswith('Estratégica') else
                   'tactical' if policy_label.startswith('Tática') else 'baseline')
-    st.caption('Planejadora v0.9.12 combina caminhos de energia, recuo e ataque com evolução/abilities legais; nenhum acesso a informação oculta e nenhuma nova regra implementada.')
+    st.caption('Planejadora v0.9.13 combina caminhos de energia, recuo e ataque com evolução/abilities legais; nenhum acesso a informação oculta e nenhuma nova regra implementada.')
 
     st.divider()
     st.markdown(section('Meu deck × Todo o meta',
@@ -1313,7 +1513,7 @@ if current_view == '⚔️ Meta':
 
 
 if current_view == '⚙️ Motor':
-    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.12')
+    st.subheader('Motor de regras — base v0.9.3.4, políticas de IA até v0.9.13')
     st.caption('Motor executável em testes técnicos; não é um simulador competitivo validado. A v1.0 ficará reservada para fidelidade e interface aprimoradas.')
     st.markdown('**Implementado:** mão inicial com Pokémon Básico, 20 cartas, banco de 3, compra, energia de tipo único, evolução, Doce Raro, recuo, ataques de dano fixo, fraqueza, nocaute, pontuação, IA clássica, tática e estratégica selecionáveis, lote auditado até 1.000 partidas, alternância de jogador inicial e replay por semente.')
     st.markdown('**Efeitos técnicos implementados:** Mega Altaria, Greninja, Hoopa ex, Mega Absol ex, Entei/Suicune (Legendary Pulse), Baxcalibur (Ice Maker), Magneton (Volt Charge), Charmeleon (Ignition), ataques Crystal Waltz, Blazing Beatdown, Crimson Dive e Diving Icicles (Chien-Pao ex), Serena’s Choice, Eviolite, Giant Cape, Inflatable Boat, Chingling, Darkrai ex, Swablu (Sono), Copycat, Cyrus, Mars, X Speed, Lucky Ice Pop, Lucky Egg, Deceptive Needle, Field Blower, Repel e Pokémon Center Lady. A correspondência é feita pelo texto registrado no catálogo.')
